@@ -145,7 +145,7 @@ final class Coordinator {
             guard let self else { return }
             Task { @MainActor in
                 guard let result = await self.llmPredictor.predict(
-                    context: textBeforeCaret, screenContext: visibleContext, maxTokens: 50
+                    context: textBeforeCaret, screenContext: visibleContext, maxTokens: 80
                 ) else { return }
 
                 // Only show if the user hasn't moved on (snapshot still matches).

@@ -5,19 +5,28 @@ import MLXHuggingFace
 import HuggingFace
 import Tokenizers
 
-/// Available on-device models, smallest to largest.
 enum JosTypeModel: String, CaseIterable {
+    case gemma4_4b = "Gemma 4 4B"
+    case smollm3_3b = "SmolLM3 3B"
     case gemma3_1b = "Gemma 3 1B"
 
     var registryConfig: ModelConfiguration {
         switch self {
+        case .gemma4_4b: return LLMRegistry.gemma4_e4b_it_4bit
+        case .smollm3_3b: return LLMRegistry.smollm3_3b_4bit
         case .gemma3_1b: return LLMRegistry.gemma3_1B_qat_4bit
+        }
+    }
+
+    var displayDescription: String {
+        switch self {
+        case .gemma4_4b: return "Best quality, ~2.5 GB"
+        case .smollm3_3b: return "Good quality, ~1.8 GB"
+        case .gemma3_1b: return "Fastest, ~800 MB"
         }
     }
 }
 
-/// Manages a local LLM for high-quality text prediction using Apple MLX.
-/// Downloads the model from HuggingFace on first use and caches it locally.
 @MainActor
 final class LLMPredictor {
 
@@ -33,7 +42,6 @@ final class LLMPredictor {
     var onStatusChange: ((Status) -> Void)?
 
     private var modelContainer: ModelContainer?
-    private var chatSession: ChatSession?
     private var currentModel: JosTypeModel?
     private var generationTask: Task<String?, Never>?
 
@@ -41,7 +49,6 @@ final class LLMPredictor {
         if currentModel == model && status == .ready { return }
         currentModel = model
         modelContainer = nil
-        chatSession = nil
 
         setStatus(.loading)
 
@@ -50,7 +57,6 @@ final class LLMPredictor {
                 configuration: model.registryConfig
             )
             modelContainer = container
-            chatSession = ChatSession(container)
             setStatus(.ready)
             NSLog("JosType: model \(model.rawValue) loaded successfully.")
         } catch {
@@ -60,18 +66,22 @@ final class LLMPredictor {
         }
     }
 
-    func predict(context: String, screenContext: String? = nil, maxTokens: Int = 50) async -> String? {
-        guard status == .ready, let session = chatSession else { return nil }
+    func predict(context: String, screenContext: String? = nil, maxTokens: Int = 80) async -> String? {
+        guard status == .ready, let container = modelContainer else { return nil }
 
         generationTask?.cancel()
 
         let prompt = buildPrompt(context: context, screenContext: screenContext)
+
         let task = Task<String?, Never> {
             do {
+                // Use a fresh ChatSession each time to avoid history accumulation.
+                let session = ChatSession(container)
                 let response = try await session.respond(to: prompt)
                 if Task.isCancelled { return nil }
 
-                let cleaned = cleanResponse(response, maxLength: 150)
+                let cleaned = cleanResponse(response, maxLength: 200)
+                NSLog("JosType: prediction (\(cleaned.count) chars): \(cleaned.prefix(80))…")
                 return cleaned.isEmpty ? nil : cleaned
             } catch {
                 if !Task.isCancelled {
@@ -92,7 +102,7 @@ final class LLMPredictor {
     var isReady: Bool { status == .ready }
 
     func cleanTranscription(raw: String, screenContext: String?) async -> String? {
-        guard status == .ready, let session = chatSession else { return nil }
+        guard status == .ready, let container = modelContainer else { return nil }
         var prompt = ""
         if let sc = screenContext, !sc.isEmpty {
             prompt += "Context from the user's screen:\n\(String(sc.prefix(1500)))\n\n"
@@ -107,6 +117,7 @@ final class LLMPredictor {
         \(raw)
         """
         do {
+            let session = ChatSession(container)
             let response = try await session.respond(to: prompt)
             let cleaned = response.trimmingCharacters(in: .whitespacesAndNewlines)
             return cleaned.isEmpty ? nil : cleaned
@@ -117,27 +128,49 @@ final class LLMPredictor {
     }
 
     private func buildPrompt(context: String, screenContext: String?) -> String {
-        var parts: [String] = []
-        if let sc = screenContext, !sc.isEmpty {
-            parts.append("Visible on screen for reference:\n\(String(sc.prefix(2000)))")
-        }
-        let trimmed = String(context.suffix(500))
-        parts.append("""
-        Continue the following text naturally. Output ONLY the continuation, \
-        no explanations, no quotes. Write one or two complete sentences that \
-        flow naturally from what was written:
+        let trimmed = String(context.suffix(600))
 
-        \(trimmed)
-        """)
-        return parts.joined(separator: "\n\n")
+        var prompt = ""
+        if let sc = screenContext, !sc.isEmpty {
+            prompt += "The user has the following visible on their screen:\n\(String(sc.prefix(1500)))\n\n"
+        }
+        prompt += """
+        The user is typing in a text field. Here is what they have written so far:
+
+        \"\(trimmed)\"
+
+        Continue their text naturally. Write the next 1-2 sentences that would \
+        logically follow. Match their tone and style. Output ONLY the continuation \
+        text with no quotes, labels, or explanation.
+        """
+        return prompt
     }
 
     private func cleanResponse(_ response: String, maxLength: Int) -> String {
         var result = response.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let newlineIdx = result.firstIndex(of: "\n") {
-            result = String(result[result.startIndex..<newlineIdx])
+        // Remove any leading quotes the model may have added.
+        while result.hasPrefix("\"") || result.hasPrefix("'") || result.hasPrefix("`") {
+            result = String(result.dropFirst())
         }
+        while result.hasSuffix("\"") || result.hasSuffix("'") || result.hasSuffix("`") {
+            result = String(result.dropLast())
+        }
+
+        // Take up to two sentences (stop at second sentence-ending punctuation).
+        var sentenceEnds = 0
+        var cutoff = result.endIndex
+        for i in result.indices {
+            let c = result[i]
+            if c == "." || c == "!" || c == "?" {
+                sentenceEnds += 1
+                if sentenceEnds >= 2 {
+                    cutoff = result.index(after: i)
+                    break
+                }
+            }
+        }
+        result = String(result[result.startIndex..<cutoff])
 
         if result.count > maxLength {
             let prefix = String(result.prefix(maxLength))
