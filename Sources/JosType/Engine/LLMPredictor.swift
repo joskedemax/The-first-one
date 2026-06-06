@@ -60,12 +60,12 @@ final class LLMPredictor {
         }
     }
 
-    func predict(context: String, maxTokens: Int = 20) async -> String? {
+    func predict(context: String, screenContext: String? = nil, maxTokens: Int = 20) async -> String? {
         guard status == .ready, let session = chatSession else { return nil }
 
         generationTask?.cancel()
 
-        let prompt = buildPrompt(context: context)
+        let prompt = buildPrompt(context: context, screenContext: screenContext)
         let task = Task<String?, Never> {
             do {
                 let response = try await session.respond(to: prompt)
@@ -91,14 +91,19 @@ final class LLMPredictor {
 
     var isReady: Bool { status == .ready }
 
-    private func buildPrompt(context: String) -> String {
+    private func buildPrompt(context: String, screenContext: String?) -> String {
+        var parts: [String] = []
+        if let sc = screenContext, !sc.isEmpty {
+            parts.append("Visible on screen for reference:\n\(String(sc.prefix(2000)))")
+        }
         let trimmed = String(context.suffix(500))
-        return """
+        parts.append("""
         Continue the following text naturally. Output ONLY the continuation, \
         no explanations, no quotes. Keep it to one short sentence or phrase:
 
         \(trimmed)
-        """
+        """)
+        return parts.joined(separator: "\n\n")
     }
 
     private func cleanResponse(_ response: String, maxLength: Int) -> String {

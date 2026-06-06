@@ -17,9 +17,12 @@ final class Coordinator {
     private var active: (suggestion: Suggestion, snapshot: TextSnapshot)?
 
     private var lastTrainedText = ""
+    private var lastProcessedSnapshot: (fullText: String, caretOffset: Int)?
     private var saveWorkItem: DispatchWorkItem?
-    /// Debounce for LLM predictions — wait until user pauses typing.
     private var llmWorkItem: DispatchWorkItem?
+    private let screenContext = ScreenContextProvider()
+    private let speechTranscriber = SpeechTranscriber()
+    private var isVoiceActive = false
 
     init() {
         ngramEngine = PredictionEngine(model: ngramModel)
@@ -37,9 +40,16 @@ final class Coordinator {
         focusTracker.onChange = { [weak self] snapshot in
             self?.handleSnapshot(snapshot)
         }
-        keyTap.hasActiveSuggestion = { [weak self] in self?.active != nil }
+        keyTap.hasActiveSuggestion = { [weak self] in
+            guard let self else { return false }
+            return self.active != nil || self.isVoiceActive
+        }
         keyTap.onAccept = { [weak self] in self?.acceptActive() ?? false }
-        keyTap.onDismiss = { [weak self] in self?.dismissActive() ?? false }
+        keyTap.onDismiss = { [weak self] in
+            guard let self else { return false }
+            if self.isVoiceActive { return self.cancelVoice() }
+            return self.dismissActive()
+        }
 
         focusTracker.start()
         keyTap.start()
@@ -55,7 +65,9 @@ final class Coordinator {
         focusTracker.stop()
         keyTap.stop()
         llmPredictor.cancelPendingPrediction()
+        speechTranscriber.cancelListening()
         clearSuggestion()
+        lastProcessedSnapshot = nil
         ngramModel.save()
     }
 
@@ -85,17 +97,32 @@ final class Coordinator {
             clearSuggestion()
             return
         }
+        guard !isVoiceActive else { return }
+
+        // Deduplicate: skip if text and caret haven't changed.
+        if let last = lastProcessedSnapshot,
+           last.fullText == snapshot.fullText,
+           last.caretOffset == snapshot.caretOffset {
+            return
+        }
+        lastProcessedSnapshot = (snapshot.fullText, snapshot.caretOffset)
+
+        let textBeforeCaret = String(snapshot.fullText.prefix(snapshot.caretOffset))
+
+        // Check for ",,talk" voice trigger.
+        if let triggerRange = VoiceTrigger.detect(in: textBeforeCaret, caretOffset: snapshot.caretOffset) {
+            startVoiceCapture(element: snapshot.element, fullText: snapshot.fullText, triggerRange: triggerRange)
+            return
+        }
 
         scheduleTraining(for: snapshot.fullText)
 
-        let textBeforeCaret = String(snapshot.fullText.prefix(snapshot.caretOffset))
         let ctx = Tokenizer.analyze(textBeforeCaret)
         if !ctx.currentPrefix.isEmpty && ctx.currentPrefix.count < Settings.shared.minPrefixLength {
             clearSuggestion()
             return
         }
 
-        // Immediately show n-gram suggestion for responsiveness.
         if let ngramSuggestion = ngramEngine.suggest(
             textBeforeCaret: textBeforeCaret,
             caretOffset: snapshot.caretOffset
@@ -103,8 +130,6 @@ final class Coordinator {
             present(ngramSuggestion, for: snapshot)
         }
 
-        // If the LLM is ready, schedule a higher-quality prediction after a
-        // short pause (so we don't run inference on every keystroke).
         if llmPredictor.isReady {
             scheduleLLMPrediction(textBeforeCaret: textBeforeCaret, snapshot: snapshot)
         }
@@ -114,11 +139,12 @@ final class Coordinator {
         llmWorkItem?.cancel()
         llmPredictor.cancelPendingPrediction()
 
+        let visibleContext = screenContext.context()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             Task { @MainActor in
                 guard let result = await self.llmPredictor.predict(
-                    context: textBeforeCaret, maxTokens: 25
+                    context: textBeforeCaret, screenContext: visibleContext, maxTokens: 25
                 ) else { return }
 
                 // Only show if the user hasn't moved on (snapshot still matches).
@@ -154,6 +180,10 @@ final class Coordinator {
     private func present(_ suggestion: Suggestion, for snapshot: TextSnapshot) {
         active = (suggestion, snapshot)
 
+        let fieldFrame = AccessibilityBridge.frame(snapshot.element)
+        let fontSize = AccessibilityBridge.fontSize(snapshot.element)
+        let font = fontSize.map { NSFont.systemFont(ofSize: $0) }
+
         let caretUTF16 = utf16Caret(in: snapshot)
         let caretRange = CFRange(location: caretUTF16, length: 0)
         let probeRange = caretUTF16 > 0
@@ -162,14 +192,14 @@ final class Coordinator {
 
         if let rect = AccessibilityBridge.boundsForRange(snapshot.element, caretRange),
            rect.height > 0 {
-            overlay.show(suggestion, caretRect: rect)
+            overlay.show(suggestion, caretRect: rect, fieldFrame: fieldFrame, font: font)
         } else if let rect = AccessibilityBridge.boundsForRange(snapshot.element, probeRange),
                   rect.height > 0 {
             let adjusted = CGRect(x: rect.maxX, y: rect.origin.y,
                                   width: 0, height: rect.height)
-            overlay.show(suggestion, caretRect: adjusted)
+            overlay.show(suggestion, caretRect: adjusted, fieldFrame: fieldFrame, font: font)
         } else if let rect = fallbackRect(for: snapshot.element) {
-            overlay.show(suggestion, caretRect: rect)
+            overlay.show(suggestion, caretRect: rect, fieldFrame: fieldFrame, font: font)
         } else {
             overlay.hide()
         }
@@ -212,6 +242,57 @@ final class Coordinator {
     private func clearSuggestion() {
         active = nil
         overlay.hide()
+    }
+
+    // MARK: - Voice capture
+
+    private func startVoiceCapture(element: AXUIElement, fullText: String, triggerRange: Range<Int>) {
+        isVoiceActive = true
+        clearSuggestion()
+        lastProcessedSnapshot = nil
+
+        // Delete ",,talk" from the field.
+        let utf16Start = utf16Index(in: fullText, characterOffset: triggerRange.lowerBound)
+        let utf16End = utf16Index(in: fullText, characterOffset: triggerRange.upperBound)
+        let cfRange = CFRange(location: utf16Start, length: utf16End - utf16Start)
+        AccessibilityBridge.setSelectedRange(element, cfRange)
+        AccessibilityBridge.replaceSelectedText(element, with: "")
+
+        // Show listening indicator.
+        let indicator = Suggestion(
+            kind: .nextWord, insertText: "", displayText: "Listening...",
+            replaceRange: triggerRange.lowerBound..<triggerRange.lowerBound
+        )
+        if let fieldFrame = AccessibilityBridge.frame(element),
+           let rect = AccessibilityBridge.boundsForRange(element, CFRange(location: utf16Start, length: 0)) {
+            overlay.show(indicator, caretRect: rect, fieldFrame: fieldFrame)
+        }
+
+        speechTranscriber.onTranscription = { [weak self] text in
+            guard let self else { return }
+            self.isVoiceActive = false
+            self.overlay.hide()
+            if let focused = AccessibilityBridge.focusedElement(), !text.isEmpty {
+                AccessibilityBridge.replaceSelectedText(focused, with: text)
+            }
+            self.lastProcessedSnapshot = nil
+        }
+        speechTranscriber.startListening()
+    }
+
+    private func cancelVoice() -> Bool {
+        guard isVoiceActive else { return false }
+        speechTranscriber.cancelListening()
+        isVoiceActive = false
+        overlay.hide()
+        lastProcessedSnapshot = nil
+        return true
+    }
+
+    private func utf16Index(in string: String, characterOffset: Int) -> Int {
+        let clamped = max(0, min(characterOffset, string.count))
+        let idx = string.index(string.startIndex, offsetBy: clamped)
+        return string.utf16.distance(from: string.startIndex, to: idx)
     }
 
     // MARK: - Training

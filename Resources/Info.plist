@@ -27,5 +27,9 @@
     <!-- Explains the Input Monitoring prompt (Tab/Esc event tap). -->
     <key>NSInputMonitoringUsageDescription</key>
     <string>JosType watches for the Tab and Esc keys so you can accept or dismiss autocomplete suggestions.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>JosType uses the microphone for voice-to-text when you type ",,talk" in any text field.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>JosType uses speech recognition to transcribe your voice into text when you type ",,talk".</string>
 </dict>
 </plist>

@@ -33,7 +33,8 @@ final class SuggestionOverlay {
     }
 
     /// Show `suggestion` anchored directly after the caret (inline ghost text).
-    func show(_ suggestion: Suggestion, caretRect: CGRect, font: NSFont? = nil) {
+    /// Clamps to `fieldFrame` boundaries when provided.
+    func show(_ suggestion: Suggestion, caretRect: CGRect, fieldFrame: CGRect? = nil, font: NSFont? = nil) {
         let displayFont = font ?? NSFont.systemFont(ofSize: 13)
         label.font = displayFont
         configureAppearance(for: suggestion)
@@ -44,12 +45,22 @@ final class SuggestionOverlay {
         let hPad: CGFloat = isCorrection ? 6 : 0
         let vPad: CGFloat = isCorrection ? 3 : 0
 
-        let labelW = label.frame.width
+        var labelW = label.frame.width
         let labelH = label.frame.height
+
+        // Clamp to field boundaries.
+        if let field = fieldFrame {
+            let available = field.maxX - caretRect.maxX - hPad * 2 - 4
+            if available < 30 {
+                hide()
+                return
+            }
+            labelW = min(labelW, available)
+        }
+
         let winW = labelW + hPad * 2
         let winH = max(labelH, caretRect.height) + vPad * 2
 
-        // Position: immediately to the right of the caret, baseline-aligned.
         let origin = NSPoint(
             x: caretRect.maxX,
             y: caretRect.origin.y - vPad

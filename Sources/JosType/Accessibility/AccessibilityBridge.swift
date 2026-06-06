@@ -85,8 +85,33 @@ enum AccessibilityBridge {
         return flipToCocoa(rect)
     }
 
+    /// The Cocoa-coordinate frame of an element (position + size).
+    static func frame(_ element: AXUIElement) -> CGRect? {
+        var posRef: CFTypeRef?
+        var sizeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success,
+              let pv = posRef, CFGetTypeID(pv) == AXValueGetTypeID(),
+              let sv = sizeRef, CFGetTypeID(sv) == AXValueGetTypeID()
+        else { return nil }
+        var pos = CGPoint.zero
+        var size = CGSize.zero
+        AXValueGetValue(pv as! AXValue, .cgPoint, &pos)
+        AXValueGetValue(sv as! AXValue, .cgSize, &size)
+        return flipToCocoa(CGRect(origin: pos, size: size))
+    }
+
+    /// Try to read font size from the element's AXFont attribute.
+    static func fontSize(_ element: AXUIElement) -> CGFloat? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, "AXFont" as CFString, &value) == .success,
+              let dict = value as? [String: Any],
+              let size = dict["AXFontSize"] as? CGFloat else { return nil }
+        return size
+    }
+
     /// Convert a top-left-origin AX screen rect to Cocoa's bottom-left origin.
-    private static func flipToCocoa(_ rect: CGRect) -> CGRect {
+    static func flipToCocoa(_ rect: CGRect) -> CGRect {
         guard let primary = NSScreen.screens.first else { return rect }
         let totalHeight = primary.frame.maxY
         return CGRect(
