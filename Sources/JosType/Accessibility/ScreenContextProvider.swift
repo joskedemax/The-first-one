@@ -38,7 +38,7 @@ final class ScreenContextProvider {
         }
     }
 
-    private static func gatherContext(ownPID: pid_t, maxLength: Int) -> String {
+    nonisolated private static func gatherContext(ownPID: pid_t, maxLength: Int) -> String {
         guard let windowList = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
         ) as? [[String: Any]] else {
@@ -70,7 +70,7 @@ final class ScreenContextProvider {
         return texts.joined(separator: "\n")
     }
 
-    private static func extractText(from element: AXUIElement, depth: Int, maxDepth: Int, texts: inout [String]) {
+    nonisolated private static func extractText(from element: AXUIElement, depth: Int, maxDepth: Int, texts: inout [String]) {
         guard depth < maxDepth else { return }
 
         if let value = AccessibilityBridge.string(element, kAXValueAttribute as String),

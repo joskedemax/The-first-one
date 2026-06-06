@@ -12,10 +12,10 @@ import Carbon.HIToolbox
 /// Fallback: an NSEvent global monitor.
 final class KeyTap {
 
-    var onAcceptWord: (() -> Bool)?
-    var onAcceptAll: (() -> Bool)?
-    var onDismiss: (() -> Bool)?
-    var hasActiveSuggestion: (() -> Bool)?
+    var onAcceptWord: (@MainActor () -> Bool)?
+    var onAcceptAll: (@MainActor () -> Bool)?
+    var onDismiss: (@MainActor () -> Bool)?
+    var hasActiveSuggestion: (@MainActor () -> Bool)?
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -95,34 +95,35 @@ final class KeyTap {
             return Unmanaged.passUnretained(event)
         }
         guard type == .keyDown else { return Unmanaged.passUnretained(event) }
-        guard hasActiveSuggestion?() == true else {
-            return Unmanaged.passUnretained(event)
-        }
 
-        let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
-        let flags = event.flags
-        let hasModifier = flags.contains(.maskCommand)
-            || flags.contains(.maskControl)
-            || flags.contains(.maskAlternate)
-
-        // Tab: accept next word (skip in terminal apps where Tab means completion)
-        if !hasModifier && keyCode == kVK_Tab {
-            if isTerminalFrontmost() {
+        return MainActor.assumeIsolated {
+            guard hasActiveSuggestion?() == true else {
                 return Unmanaged.passUnretained(event)
             }
-            if onAcceptWord?() == true { return nil }
-        }
 
-        // Backtick or Right Arrow: accept entire suggestion
-        if !hasModifier && (keyCode == kVK_RightArrow || keyCode == kVK_ANSI_Grave) {
-            if onAcceptAll?() == true { return nil }
-        }
+            let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
+            let flags = event.flags
+            let hasModifier = flags.contains(.maskCommand)
+                || flags.contains(.maskControl)
+                || flags.contains(.maskAlternate)
 
-        if keyCode == kVK_Escape {
-            if onDismiss?() == true { return nil }
-        }
+            if !hasModifier && keyCode == kVK_Tab {
+                if isTerminalFrontmost() {
+                    return Unmanaged.passUnretained(event)
+                }
+                if onAcceptWord?() == true { return nil }
+            }
 
-        return Unmanaged.passUnretained(event)
+            if !hasModifier && (keyCode == kVK_RightArrow || keyCode == kVK_ANSI_Grave) {
+                if onAcceptAll?() == true { return nil }
+            }
+
+            if keyCode == kVK_Escape {
+                if onDismiss?() == true { return nil }
+            }
+
+            return Unmanaged.passUnretained(event)
+        }
     }
 
     private func isTerminalFrontmost() -> Bool {
@@ -147,24 +148,21 @@ final class KeyTap {
     }
 
     private func handleFallbackKey(_ event: NSEvent) {
-        guard hasActiveSuggestion?() == true else { return }
         let keyCode = Int(event.keyCode)
         let hasModifier = event.modifierFlags.contains(.command)
             || event.modifierFlags.contains(.control)
             || event.modifierFlags.contains(.option)
 
-        if !hasModifier && keyCode == kVK_Tab {
-            if isTerminalFrontmost() { return }
-            DispatchQueue.main.async { [weak self] in
-                _ = self?.onAcceptWord?()
-            }
-        } else if !hasModifier && (keyCode == kVK_RightArrow || keyCode == kVK_ANSI_Grave) {
-            DispatchQueue.main.async { [weak self] in
-                _ = self?.onAcceptAll?()
-            }
-        } else if keyCode == kVK_Escape {
-            DispatchQueue.main.async { [weak self] in
-                _ = self?.onDismiss?()
+        Task { @MainActor [weak self] in
+            guard let self, self.hasActiveSuggestion?() == true else { return }
+
+            if !hasModifier && keyCode == kVK_Tab {
+                if self.isTerminalFrontmost() { return }
+                _ = self.onAcceptWord?()
+            } else if !hasModifier && (keyCode == kVK_RightArrow || keyCode == kVK_ANSI_Grave) {
+                _ = self.onAcceptAll?()
+            } else if keyCode == kVK_Escape {
+                _ = self.onDismiss?()
             }
         }
     }

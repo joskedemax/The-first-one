@@ -34,7 +34,7 @@ final class SpeechTranscriber {
         }
 
         SFSpeechRecognizer.requestAuthorization { [weak self] authStatus in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 guard let self else { return }
                 switch authStatus {
                 case .authorized:
@@ -84,7 +84,7 @@ final class SpeechTranscriber {
         }
 
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 guard let self else { return }
                 if let result {
                     self.lastTranscript = result.bestTranscription.formattedString
@@ -100,14 +100,14 @@ final class SpeechTranscriber {
         resetSilenceTimer()
 
         maxDurationTimer = Timer.scheduledTimer(withTimeInterval: maxRecordingDuration, repeats: false) { [weak self] _ in
-            self?.finishRecording()
+            Task { @MainActor in self?.finishRecording() }
         }
     }
 
     private func resetSilenceTimer() {
         silenceTimer?.invalidate()
         silenceTimer = Timer.scheduledTimer(withTimeInterval: silenceTimeout, repeats: false) { [weak self] _ in
-            self?.finishRecording()
+            Task { @MainActor in self?.finishRecording() }
         }
     }
 

@@ -14,7 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // On first launch (or if permissions are missing), guide the user.
         if !Settings.shared.hasCompletedSetup || !PermissionsGuide.allGranted {
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 PermissionsGuide.showSetupWizard()
                 Settings.shared.hasCompletedSetup = true
             }

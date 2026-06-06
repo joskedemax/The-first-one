@@ -53,7 +53,8 @@ final class VoiceCaptureController {
             guard let self else { return }
             guard !text.isEmpty else {
                 self.recordingIndicator.updatePartialText("Voice capture failed")
-                DispatchQueue.main.asyncAfter(deadline: .now() + Self.errorDisplayDuration) { [weak self] in
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(Self.errorDisplayDuration))
                     self?.isActive = false
                     self?.recordingIndicator.hide()
                     self?.onFinished?()

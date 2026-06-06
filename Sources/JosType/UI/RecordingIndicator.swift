@@ -108,13 +108,15 @@ final class RecordingIndicator {
         textLabel.frame = NSRect(x: pad + micW + gap, y: textCenterY, width: textW, height: textH)
     }
 
+    private var pulseBright = true
+
     private func startPulse() {
-        var bright = true
+        pulseBright = true
         pulseTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            MainActor.assumeIsolated {
-                self.micLabel.alphaValue = bright ? 0.4 : 1.0
-                bright.toggle()
+            Task { @MainActor in
+                guard let self else { return }
+                self.micLabel.alphaValue = self.pulseBright ? 0.4 : 1.0
+                self.pulseBright.toggle()
             }
         }
     }

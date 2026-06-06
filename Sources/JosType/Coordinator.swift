@@ -380,10 +380,12 @@ final class Coordinator {
 
         saveWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.ngramModel.train(on: text)
-            self.ngramEngine.refreshDictionary()
-            self.ngramModel.save()
+            Task { @MainActor in
+                guard let self else { return }
+                self.ngramModel.train(on: text)
+                self.ngramEngine.refreshDictionary()
+                self.ngramModel.save()
+            }
         }
         saveWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.trainingSaveDelay, execute: work)
