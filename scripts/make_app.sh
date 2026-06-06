@@ -33,6 +33,19 @@ if [ -d "$BIN_PATH/${APP_NAME}_${APP_NAME}.bundle" ]; then
   cp -R "$BIN_PATH/${APP_NAME}_${APP_NAME}.bundle" "$RES_DIR/"
 fi
 
+# Copy Metal shader libraries (.metallib) required by MLX into the app bundle
+# so the GPU backend can find them at runtime.
+find "$BIN_PATH" -name "*.metallib" -exec cp {} "$MACOS_DIR/" \;
+
+# Also copy any .bundle directories from dependencies (MLX, etc.) that contain
+# Metal resources or other runtime assets.
+for bundle in "$BIN_PATH"/*.bundle; do
+  [ -d "$bundle" ] || continue
+  name="$(basename "$bundle")"
+  [ "$name" = "${APP_NAME}_${APP_NAME}.bundle" ] && continue
+  cp -R "$bundle" "$RES_DIR/"
+done
+
 # Ad-hoc code signature so macOS will let it request Accessibility/Input
 # Monitoring. Replace "-" with your Developer ID for distribution.
 echo "==> Code signing (ad-hoc)…"
