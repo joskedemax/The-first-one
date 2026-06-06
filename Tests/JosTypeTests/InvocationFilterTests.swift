@@ -91,6 +91,23 @@ final class InvocationFilterTests: XCTestCase {
         XCTAssertTrue(result)
     }
 
+    func testCooldownDecaysAfterInterval() {
+        let filter = InvocationFilter()
+        filter.baseCooldown = 10.0
+        filter.rejectionDecayInterval = 0.0
+
+        filter.noteRejected()
+        filter.noteRejected()
+        filter.noteRejected()
+
+        let result = filter.shouldSuggestContinuation(
+            textBeforeCaret: "hello world test again",
+            textAfterCaret: "",
+            bundleID: "com.test"
+        )
+        XCTAssertTrue(result, "Cooldown should have decayed after rejectionDecayInterval")
+    }
+
     func testIsWordChar() {
         XCTAssertTrue(InvocationFilter.isWordChar("a"))
         XCTAssertTrue(InvocationFilter.isWordChar("5"))

@@ -19,6 +19,10 @@ final class StatusBarController {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         configureButton()
         buildMenu()
+
+        coordinator.onModelStatusChange = { [weak self] _ in
+            self?.updateModelStatus()
+        }
     }
 
     private func configureButton() {

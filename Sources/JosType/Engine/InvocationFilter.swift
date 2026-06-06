@@ -16,6 +16,8 @@ final class InvocationFilter {
     var baseCooldown: TimeInterval = 1.2
     /// Hard ceiling on the cooldown.
     var maxCooldown: TimeInterval = 8.0
+    /// Rejection count resets after this long with no new rejections.
+    var rejectionDecayInterval: TimeInterval = 120.0
 
     private var lastRejectionTime: Date?
     private var rejectionCount = 0
@@ -46,7 +48,12 @@ final class InvocationFilter {
             }
         }
 
-        // 3. Respect cooldown after rejections.
+        // 3. Decay old rejections so cooldown doesn't persist forever.
+        if let t = lastRejectionTime, Date().timeIntervalSince(t) > rejectionDecayInterval {
+            reset()
+        }
+
+        // 4. Respect cooldown after rejections.
         if let t = lastRejectionTime, Date().timeIntervalSince(t) < currentCooldown() {
             return false
         }

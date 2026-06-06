@@ -70,7 +70,7 @@ final class LLMPredictor {
         if currentModel == model && status == .ready { return }
         currentModel = model
         modelContainer = nil
-        invalidateCache()
+        cancelPendingPrediction()
 
         setStatus(.loading)
 
@@ -96,8 +96,8 @@ final class LLMPredictor {
         screenContext: String? = nil,
         maxTokens: Int = 80,
         onChunk: @escaping @MainActor (String) -> Void
-    ) async -> String? {
-        guard status == .ready, let container = modelContainer else { return nil }
+    ) async {
+        guard status == .ready, let container = modelContainer else { return }
 
         generationTask?.cancel()
 
@@ -133,8 +133,6 @@ final class LLMPredictor {
         }
         generationTask = task
         await task.value
-
-        return nil // result delivered via onChunk
     }
 
     /// Non-streaming prediction (used for instruct models and voice cleanup).
@@ -240,13 +238,13 @@ final class LLMPredictor {
                         if output.count > 250 { break }
 
                         let partial = self.cleanResponse(output, maxLength: 200)
-                        if partial.count >= 2 {
+                        if partial.count >= 2, !Task.isCancelled {
                             var display = partial
                             if let last = context.last, !last.isWhitespace,
                                let first = display.first, (first.isLetter || first.isNumber) {
                                 display = " " + display
                             }
-                            Task { @MainActor in onChunk(display) }
+                            await MainActor.run { onChunk(display) }
                         }
                     }
                 }
@@ -308,7 +306,7 @@ final class LLMPredictor {
             cleaned = " " + cleaned
         }
 
-        NSLog("JosType: prediction (\(cleaned.count) chars): \(cleaned.prefix(80))…")
+        NSLog("JosType: prediction (\(cleaned.count) chars)")
         return cleaned
     }
 

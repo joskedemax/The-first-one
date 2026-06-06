@@ -128,4 +128,11 @@ enum AccessibilityBridge {
         guard AXUIElementGetPid(element, &pid) == .success else { return nil }
         return pid
     }
+
+    /// Convert a Swift Character offset to a UTF-16 (NSString) offset.
+    static func utf16Offset(in string: String, characterOffset: Int) -> Int {
+        let clamped = max(0, min(characterOffset, string.count))
+        let idx = string.index(string.startIndex, offsetBy: clamped)
+        return string.utf16.distance(from: string.startIndex, to: idx)
+    }
 }

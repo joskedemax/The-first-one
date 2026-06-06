@@ -35,6 +35,10 @@ final class Coordinator {
     // MARK: - Public
 
     var modelStatus: LLMPredictor.Status { llmPredictor.status }
+    var onModelStatusChange: ((LLMPredictor.Status) -> Void)? {
+        get { llmPredictor.onStatusChange }
+        set { llmPredictor.onStatusChange = newValue }
+    }
 
     func start() {
         ngramModel.loadSeed()
@@ -58,6 +62,7 @@ final class Coordinator {
 
         focusTracker.start()
         keyTap.start()
+        screenContext.warmUp()
 
         // Start loading the selected model in the background.
         let selectedModel = Settings.shared.selectedModel
@@ -167,7 +172,7 @@ final class Coordinator {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             Task { @MainActor in
-                _ = await self.llmPredictor.predictStreaming(
+                await self.llmPredictor.predictStreaming(
                     context: textBeforeCaret,
                     screenContext: visibleContext,
                     maxTokens: Self.maxLLMTokens

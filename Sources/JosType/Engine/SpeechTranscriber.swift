@@ -18,7 +18,9 @@ final class SpeechTranscriber {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var silenceTimer: Timer?
+    private var maxDurationTimer: Timer?
     private let silenceTimeout: TimeInterval = 2.0
+    private let maxRecordingDuration: TimeInterval = 60.0
     private var lastTranscript = ""
 
     func startListening() {
@@ -96,6 +98,10 @@ final class SpeechTranscriber {
         }
 
         resetSilenceTimer()
+
+        maxDurationTimer = Timer.scheduledTimer(withTimeInterval: maxRecordingDuration, repeats: false) { [weak self] _ in
+            self?.finishRecording()
+        }
     }
 
     private func resetSilenceTimer() {
@@ -118,6 +124,8 @@ final class SpeechTranscriber {
     private func stopRecording() {
         silenceTimer?.invalidate()
         silenceTimer = nil
+        maxDurationTimer?.invalidate()
+        maxDurationTimer = nil
         recognitionRequest?.endAudio()
         recognitionRequest = nil
         recognitionTask?.cancel()

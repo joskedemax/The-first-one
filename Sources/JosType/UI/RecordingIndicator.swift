@@ -2,6 +2,7 @@ import AppKit
 
 /// Floating pill that appears during voice capture, showing a pulsing mic icon
 /// and live partial transcription text.
+@MainActor
 final class RecordingIndicator {
 
     private let window: NSWindow
@@ -110,8 +111,8 @@ final class RecordingIndicator {
     private func startPulse() {
         var bright = true
         pulseTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in
-            DispatchQueue.main.async {
-                guard let self else { return }
+            guard let self else { return }
+            MainActor.assumeIsolated {
                 self.micLabel.alphaValue = bright ? 0.4 : 1.0
                 bright.toggle()
             }

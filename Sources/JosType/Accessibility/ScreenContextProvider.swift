@@ -10,6 +10,10 @@ final class ScreenContextProvider {
     private let maxContextLength = 2000
     private var refreshInFlight = false
 
+    func warmUp() {
+        scheduleRefresh()
+    }
+
     func context() -> String? {
         if Date().timeIntervalSince(lastRefresh) > refreshInterval {
             scheduleRefresh()

@@ -3,9 +3,21 @@ import XCTest
 
 final class VoiceTriggerTests: XCTestCase {
 
+    private var originalTrigger: String?
+
     override func setUp() {
         super.setUp()
+        originalTrigger = UserDefaults.standard.string(forKey: "jostype.voiceTrigger")
         UserDefaults.standard.set(",,talk", forKey: "jostype.voiceTrigger")
+    }
+
+    override func tearDown() {
+        if let original = originalTrigger {
+            UserDefaults.standard.set(original, forKey: "jostype.voiceTrigger")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "jostype.voiceTrigger")
+        }
+        super.tearDown()
     }
 
     func testDetectsTriggerAtEnd() {

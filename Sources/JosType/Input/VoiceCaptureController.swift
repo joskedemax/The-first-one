@@ -23,8 +23,8 @@ final class VoiceCaptureController {
     ) {
         isActive = true
 
-        let utf16Start = utf16Index(in: fullText, characterOffset: triggerRange.lowerBound)
-        let utf16End = utf16Index(in: fullText, characterOffset: triggerRange.upperBound)
+        let utf16Start = AccessibilityBridge.utf16Offset(in: fullText, characterOffset: triggerRange.lowerBound)
+        let utf16End = AccessibilityBridge.utf16Offset(in: fullText, characterOffset: triggerRange.upperBound)
         let cfRange = CFRange(location: utf16Start, length: utf16End - utf16Start)
         if !AccessibilityBridge.setSelectedRange(element, cfRange) {
             NSLog("JosType: failed to select trigger phrase range for deletion")
@@ -33,7 +33,8 @@ final class VoiceCaptureController {
             NSLog("JosType: failed to delete trigger phrase from field")
         }
 
-        if let rect = AccessibilityBridge.boundsForRange(element, CFRange(location: utf16Start, length: 0)) {
+        if let rect = AccessibilityBridge.boundsForRange(element, CFRange(location: utf16Start, length: 0)),
+           rect.height > 0 {
             recordingIndicator.show(near: rect)
         }
 
@@ -108,9 +109,4 @@ final class VoiceCaptureController {
         return result
     }
 
-    private func utf16Index(in string: String, characterOffset: Int) -> Int {
-        let clamped = max(0, min(characterOffset, string.count))
-        let idx = string.index(string.startIndex, offsetBy: clamped)
-        return string.utf16.distance(from: string.startIndex, to: idx)
-    }
 }
