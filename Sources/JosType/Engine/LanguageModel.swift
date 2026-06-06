@@ -103,30 +103,44 @@ final class LanguageModel {
         let base = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("JosType", isDirectory: true)
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        } catch {
+            NSLog("JosType: failed to create data directory: \(error.localizedDescription)")
+        }
         return base.appendingPathComponent("model.json")
     }
 
     func load() {
-        guard let data = try? Data(contentsOf: Self.storeURL),
-              let decoded = try? JSONDecoder().decode(Persisted.self, from: data) else {
-            return
-        }
-        queue.async(flags: .barrier) {
-            self.bigrams = decoded.bigrams
-            self.trigrams = decoded.trigrams
-            for (w, c) in decoded.unigrams {
-                self.unigrams[w, default: 0] += c
-                self.trie.insert(w, frequency: c)
+        let url = Self.storeURL
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        do {
+            let data = try Data(contentsOf: url)
+            let decoded = try JSONDecoder().decode(Persisted.self, from: data)
+            queue.async(flags: .barrier) {
+                self.bigrams = decoded.bigrams
+                self.trigrams = decoded.trigrams
+                for (w, c) in decoded.unigrams {
+                    self.unigrams[w, default: 0] += c
+                    self.trie.insert(w, frequency: c)
+                }
             }
+        } catch {
+            NSLog("JosType: failed to load model data, starting fresh: \(error.localizedDescription)")
+            let backup = url.deletingPathExtension().appendingPathExtension("corrupt.json")
+            try? FileManager.default.moveItem(at: url, to: backup)
         }
     }
 
     func save() {
         queue.sync {
             let snapshot = Persisted(unigrams: unigrams, bigrams: bigrams, trigrams: trigrams)
-            guard let data = try? JSONEncoder().encode(snapshot) else { return }
-            try? data.write(to: Self.storeURL, options: .atomic)
+            do {
+                let data = try JSONEncoder().encode(snapshot)
+                try data.write(to: Self.storeURL, options: .atomic)
+            } catch {
+                NSLog("JosType: failed to save model data: \(error.localizedDescription)")
+            }
         }
     }
 }

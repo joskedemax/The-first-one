@@ -338,12 +338,15 @@ final class Coordinator {
         clearSuggestion()
         lastProcessedSnapshot = nil
 
-        // Delete ",,talk" from the field.
         let utf16Start = utf16Index(in: fullText, characterOffset: triggerRange.lowerBound)
         let utf16End = utf16Index(in: fullText, characterOffset: triggerRange.upperBound)
         let cfRange = CFRange(location: utf16Start, length: utf16End - utf16Start)
-        AccessibilityBridge.setSelectedRange(element, cfRange)
-        AccessibilityBridge.replaceSelectedText(element, with: "")
+        if !AccessibilityBridge.setSelectedRange(element, cfRange) {
+            NSLog("JosType: failed to select trigger phrase range for deletion")
+        }
+        if !AccessibilityBridge.replaceSelectedText(element, with: "") {
+            NSLog("JosType: failed to delete trigger phrase from field")
+        }
 
         // Show floating recording pill near caret.
         if let rect = AccessibilityBridge.boundsForRange(element, CFRange(location: utf16Start, length: 0)) {
@@ -366,9 +369,12 @@ final class Coordinator {
         speechTranscriber.onTranscription = { [weak self] text in
             guard let self else { return }
             guard !text.isEmpty else {
-                self.isVoiceActive = false
-                self.recordingIndicator.hide()
-                self.lastProcessedSnapshot = nil
+                self.recordingIndicator.updatePartialText("Voice capture failed")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                    self?.isVoiceActive = false
+                    self?.recordingIndicator.hide()
+                    self?.lastProcessedSnapshot = nil
+                }
                 return
             }
             self.recordingIndicator.showProcessing()
