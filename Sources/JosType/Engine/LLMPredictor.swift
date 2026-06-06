@@ -2,6 +2,8 @@ import Foundation
 import MLXLLM
 import MLXLMCommon
 import MLXHuggingFace
+import HuggingFace
+import Tokenizers
 
 /// Available on-device models, smallest to largest.
 enum JosTypeModel: String, CaseIterable {
