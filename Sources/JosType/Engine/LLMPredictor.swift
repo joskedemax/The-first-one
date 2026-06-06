@@ -296,7 +296,7 @@ final class LLMPredictor {
 
     // MARK: - Post-processing
 
-    private func postProcess(_ response: String, context: String) -> String? {
+    func postProcess(_ response: String, context: String) -> String? {
         var cleaned = cleanResponse(response, maxLength: 200)
         guard cleaned.count >= 2 else { return nil }
 
@@ -341,7 +341,7 @@ final class LLMPredictor {
         return prompt
     }
 
-    private func cleanResponse(_ response: String, maxLength: Int) -> String {
+    func cleanResponse(_ response: String, maxLength: Int) -> String {
         var result = response.trimmingCharacters(in: .whitespacesAndNewlines)
 
         while result.hasPrefix("\"") || result.hasPrefix("'") || result.hasPrefix("`") {

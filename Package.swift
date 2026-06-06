@@ -32,6 +32,11 @@ let package = Package(
                 .linkedFramework("Speech"),
                 .linkedFramework("AVFoundation")
             ]
+        ),
+        .testTarget(
+            name: "JosTypeTests",
+            dependencies: ["JosType"],
+            path: "Tests/JosTypeTests"
         )
     ]
 )
