@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 #
-# Build JosType in release mode and assemble a runnable JosType.app bundle.
+# Build JosType and assemble a runnable JosType.app bundle.
 # Run from the repo root:  ./scripts/make_app.sh
+#
+# IMPORTANT: We build with `xcodebuild`, NOT `swift build`. MLX (mlx-swift)
+# ships Metal compute shaders that must be compiled into a `default.metallib`
+# via its `PrepareMetalShaders` plugin. SwiftPM's command-line build cannot
+# compile Metal shaders — only Xcode's build system (xcodebuild) can. Using
+# `swift build` produces a binary that crashes at runtime with:
+#   "Failed to load the default metallib. library not found"
 #
 set -euo pipefail
 
@@ -14,92 +21,58 @@ APP_DIR="$BUILD_DIR/$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS/MacOS"
 RES_DIR="$CONTENTS/Resources"
+DERIVED="$BUILD_DIR/DerivedData"
 
-echo "==> Building (release)…"
-swift build -c release
+echo "==> Building (release) via xcodebuild…"
+echo "    (This compiles MLX's Metal shaders — first build is slow.)"
+xcodebuild build \
+  -scheme "$APP_NAME" \
+  -configuration Release \
+  -destination "platform=macOS" \
+  -derivedDataPath "$DERIVED" \
+  -skipPackagePluginValidation \
+  -skipMacroValidation \
+  | (xcpretty 2>/dev/null || cat)
 
-BIN_PATH="$(swift build -c release --show-bin-path)"
+PRODUCTS="$DERIVED/Build/Products/Release"
 
-echo "==> Compiling Metal shaders for MLX…"
-METAL_SOURCES_DIR="$ROOT/.build/checkouts/mlx-swift/Source/Cmlx/mlx-generated/metal"
-METAL_KERNEL_DIR="$ROOT/.build/checkouts/mlx-swift/Source/Cmlx/mlx/mlx/backend/metal/kernels"
-METAL_TMP="$BUILD_DIR/metal_tmp"
-rm -rf "$METAL_TMP"
-mkdir -p "$METAL_TMP"
-
-# Collect all .metal source files from MLX
-METAL_FILES=()
-if [ -d "$METAL_SOURCES_DIR" ]; then
-  while IFS= read -r f; do METAL_FILES+=("$f"); done < <(find "$METAL_SOURCES_DIR" -name "*.metal" -type f)
-fi
-if [ -d "$METAL_KERNEL_DIR" ]; then
-  while IFS= read -r f; do METAL_FILES+=("$f"); done < <(find "$METAL_KERNEL_DIR" -name "*.metal" -type f)
-fi
-
-if [ ${#METAL_FILES[@]} -gt 0 ]; then
-  # Build include paths for Metal headers
-  METAL_INCLUDE_PATHS=(
-    "-I" "$ROOT/.build/checkouts/mlx-swift/Source/Cmlx/mlx-generated/metal"
-    "-I" "$ROOT/.build/checkouts/mlx-swift/Source/Cmlx/mlx/mlx/backend/metal/kernels"
-    "-I" "$ROOT/.build/checkouts/mlx-swift/Source/Cmlx/mlx/mlx/backend/metal/kernels/steel"
-    "-I" "$ROOT/.build/checkouts/mlx-swift/Source/Cmlx/mlx/mlx/backend/metal/kernels/steel/attn"
-    "-I" "$ROOT/.build/checkouts/mlx-swift/Source/Cmlx/mlx/mlx/backend/metal/kernels/steel/conv"
-    "-I" "$ROOT/.build/checkouts/mlx-swift/Source/Cmlx/mlx/mlx/backend/metal/kernels/steel/gemm"
-  )
-
-  AIR_FILES=()
-  for metal_file in "${METAL_FILES[@]}"; do
-    base="$(basename "$metal_file" .metal)"
-    air_file="$METAL_TMP/${base}.air"
-    if xcrun metal -c "$metal_file" -o "$air_file" \
-        "${METAL_INCLUDE_PATHS[@]}" \
-        -std=metal3.0 -target air64-apple-macos14.0 2>/dev/null; then
-      AIR_FILES+=("$air_file")
-    fi
-  done
-
-  if [ ${#AIR_FILES[@]} -gt 0 ]; then
-    xcrun metallib "${AIR_FILES[@]}" -o "$METAL_TMP/default.metallib" 2>/dev/null && \
-      echo "   Compiled ${#AIR_FILES[@]} Metal shaders into default.metallib" || \
-      echo "   warning: metallib linking failed; MLX may fall back to JIT compilation."
-  else
-    echo "   warning: no Metal shaders compiled successfully."
-  fi
-else
-  echo "   warning: no Metal source files found."
+if [ ! -f "$PRODUCTS/$APP_NAME" ]; then
+  echo "error: built executable not found at $PRODUCTS/$APP_NAME" >&2
+  echo "       Listing products dir:" >&2
+  ls -la "$PRODUCTS" >&2 || true
+  exit 1
 fi
 
 echo "==> Assembling $APP_NAME.app…"
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RES_DIR"
 
-cp "$BIN_PATH/$APP_NAME" "$MACOS_DIR/$APP_NAME"
+cp "$PRODUCTS/$APP_NAME" "$MACOS_DIR/$APP_NAME"
 cp "$ROOT/Resources/Info.plist" "$CONTENTS/Info.plist"
 
-# SwiftPM emits resources in a bundle named JosType_JosType.bundle; copy it in so
-# Bundle.module resolves at runtime inside the .app.
-if [ -d "$BIN_PATH/${APP_NAME}_${APP_NAME}.bundle" ]; then
-  cp -R "$BIN_PATH/${APP_NAME}_${APP_NAME}.bundle" "$RES_DIR/"
-fi
-
-# Copy compiled Metal library into the app bundle next to the executable.
-if [ -f "$METAL_TMP/default.metallib" ]; then
-  cp "$METAL_TMP/default.metallib" "$MACOS_DIR/default.metallib"
-  echo "   Copied default.metallib into app bundle."
-fi
-
-# Also copy any pre-built .metallib files from the build directory.
-find "$BIN_PATH" -name "*.metallib" -exec cp {} "$MACOS_DIR/" \;
-
-# Copy dependency .bundle directories that may contain runtime resources.
-for bundle in "$BIN_PATH"/*.bundle; do
-  [ -d "$bundle" ] || continue
-  name="$(basename "$bundle")"
-  [ "$name" = "${APP_NAME}_${APP_NAME}.bundle" ] && continue
+# Copy every resource bundle xcodebuild produced (app's own resources plus
+# dependency bundles such as mlx-swift_Cmlx.bundle, which holds the metallib).
+shopt -s nullglob
+for bundle in "$PRODUCTS"/*.bundle; do
   cp -R "$bundle" "$RES_DIR/"
 done
 
-rm -rf "$METAL_TMP"
+# The MLX Metal device looks for its metallib relative to the executable and
+# relative to the bundle. Make sure mlx-swift_Cmlx.bundle is also reachable
+# next to the binary, and surface default.metallib directly beside it too.
+MLX_BUNDLE="$PRODUCTS/mlx-swift_Cmlx.bundle"
+if [ -d "$MLX_BUNDLE" ]; then
+  cp -R "$MLX_BUNDLE" "$MACOS_DIR/"
+  METALLIB="$(find "$MLX_BUNDLE" -name "*.metallib" -print -quit || true)"
+  if [ -n "${METALLIB:-}" ]; then
+    cp "$METALLIB" "$MACOS_DIR/default.metallib"
+    echo "   Bundled $(basename "$METALLIB") -> default.metallib"
+  fi
+else
+  echo "   warning: mlx-swift_Cmlx.bundle not found in build products." >&2
+  echo "            MLX inference will fail to load its Metal shaders." >&2
+fi
+shopt -u nullglob
 
 # Ad-hoc code signature so macOS will let it request Accessibility/Input
 # Monitoring. Replace "-" with your Developer ID for distribution.
