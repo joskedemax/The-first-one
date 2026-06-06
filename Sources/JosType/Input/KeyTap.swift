@@ -1,14 +1,19 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// Intercepts Tab, Right-Arrow, and Escape to accept/dismiss suggestions.
+/// Intercepts keys to accept/dismiss suggestions.
+///
+/// - Tab: accept next word from suggestion
+/// - Backtick (`): accept entire suggestion
+/// - Right Arrow: accept entire suggestion
+/// - Escape: dismiss suggestion
 ///
 /// Primary mechanism: a CGEventTap (requires Input Monitoring permission).
-/// Fallback: an NSEvent global monitor that detects the keypress *after* it
-/// reaches the app and immediately undoes the unwanted character.
+/// Fallback: an NSEvent global monitor.
 final class KeyTap {
 
-    var onAccept: (() -> Bool)?
+    var onAcceptWord: (() -> Bool)?
+    var onAcceptAll: (() -> Bool)?
     var onDismiss: (() -> Bool)?
     var hasActiveSuggestion: (() -> Bool)?
 
@@ -16,6 +21,19 @@ final class KeyTap {
     private var runLoopSource: CFRunLoopSource?
     private var globalMonitor: Any?
     private var usingFallback = false
+
+    private static let terminalBundleIDs: Set<String> = [
+        "com.apple.Terminal",
+        "com.googlecode.iterm2",
+        "net.kovidgoyal.kitty",
+        "com.mitchellh.ghostty",
+        "dev.warp.Warp-Stable",
+        "dev.warp.Warp",
+        "com.github.wez.wezterm",
+        "co.zeit.hyper",
+        "com.panic.Prompt3",
+        "io.alacritty",
+    ]
 
     func start() {
         if tryCreateEventTap() {
@@ -87,12 +105,30 @@ final class KeyTap {
             || flags.contains(.maskControl)
             || flags.contains(.maskAlternate)
 
-        if !hasModifier && (keyCode == kVK_Tab || keyCode == kVK_RightArrow) {
-            if onAccept?() == true { return nil }
-        } else if keyCode == kVK_Escape {
+        // Tab: accept next word (skip in terminal apps where Tab means completion)
+        if !hasModifier && keyCode == kVK_Tab {
+            if isTerminalFrontmost() {
+                return Unmanaged.passUnretained(event)
+            }
+            if onAcceptWord?() == true { return nil }
+        }
+
+        // Backtick or Right Arrow: accept entire suggestion
+        if !hasModifier && (keyCode == kVK_RightArrow || keyCode == kVK_ANSI_Grave) {
+            if onAcceptAll?() == true { return nil }
+        }
+
+        if keyCode == kVK_Escape {
             if onDismiss?() == true { return nil }
         }
+
         return Unmanaged.passUnretained(event)
+    }
+
+    private func isTerminalFrontmost() -> Bool {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              let bundleID = app.bundleIdentifier else { return false }
+        return Self.terminalBundleIDs.contains(bundleID)
     }
 
     // MARK: - Fallback: NSEvent global monitor
@@ -117,9 +153,14 @@ final class KeyTap {
             || event.modifierFlags.contains(.control)
             || event.modifierFlags.contains(.option)
 
-        if !hasModifier && (keyCode == kVK_Tab || keyCode == kVK_RightArrow) {
+        if !hasModifier && keyCode == kVK_Tab {
+            if isTerminalFrontmost() { return }
             DispatchQueue.main.async { [weak self] in
-                _ = self?.onAccept?()
+                _ = self?.onAcceptWord?()
+            }
+        } else if !hasModifier && (keyCode == kVK_RightArrow || keyCode == kVK_ANSI_Grave) {
+            DispatchQueue.main.async { [weak self] in
+                _ = self?.onAcceptAll?()
             }
         } else if keyCode == kVK_Escape {
             DispatchQueue.main.async { [weak self] in

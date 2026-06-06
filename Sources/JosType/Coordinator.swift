@@ -44,7 +44,8 @@ final class Coordinator {
             guard let self else { return false }
             return self.active != nil || self.isVoiceActive
         }
-        keyTap.onAccept = { [weak self] in self?.acceptActive() ?? false }
+        keyTap.onAcceptWord = { [weak self] in self?.acceptNextWord() ?? false }
+        keyTap.onAcceptAll = { [weak self] in self?.acceptAll() ?? false }
         keyTap.onDismiss = { [weak self] in
             guard let self else { return false }
             if self.isVoiceActive { return self.cancelVoice() }
@@ -144,7 +145,7 @@ final class Coordinator {
             guard let self else { return }
             Task { @MainActor in
                 guard let result = await self.llmPredictor.predict(
-                    context: textBeforeCaret, screenContext: visibleContext, maxTokens: 25
+                    context: textBeforeCaret, screenContext: visibleContext, maxTokens: 50
                 ) else { return }
 
                 // Only show if the user hasn't moved on (snapshot still matches).
@@ -223,14 +224,66 @@ final class Coordinator {
         return (prefix as NSString).length
     }
 
-    private func acceptActive() -> Bool {
+    private func acceptAll() -> Bool {
         guard let (suggestion, snapshot) = active else { return false }
         let ok = TextInserter.apply(suggestion, to: snapshot.element, fullText: snapshot.fullText)
         clearSuggestion()
+        lastProcessedSnapshot = nil
         if Settings.shared.isLearningEnabled {
             ngramModel.train(on: suggestion.insertText)
         }
         return ok
+    }
+
+    private func acceptNextWord() -> Bool {
+        guard let (suggestion, snapshot) = active else { return false }
+        let text = suggestion.insertText
+        guard !text.isEmpty else { return false }
+
+        // Find the end of the first word (include trailing space).
+        let trimmed = text.drop(while: { $0 == " " })
+        guard let spaceIdx = trimmed.firstIndex(of: " ") else {
+            return acceptAll()
+        }
+        let wordEnd = trimmed.index(after: spaceIdx)
+        let firstWord = String(text[text.startIndex..<wordEnd])
+        let remaining = String(text[wordEnd...])
+
+        // Insert just the first word.
+        let wordSuggestion = Suggestion(
+            kind: suggestion.kind,
+            insertText: firstWord,
+            displayText: firstWord,
+            replaceRange: suggestion.replaceRange
+        )
+        let ok = TextInserter.apply(wordSuggestion, to: snapshot.element, fullText: snapshot.fullText)
+        guard ok else { return false }
+        lastProcessedSnapshot = nil
+
+        if remaining.trimmingCharacters(in: .whitespaces).isEmpty {
+            clearSuggestion()
+        } else {
+            // Update active suggestion with remaining text.
+            let newCaretOffset = suggestion.replaceRange.upperBound + firstWord.count
+            let newSnapshot = TextSnapshot(
+                element: snapshot.element,
+                fullText: snapshot.fullText + firstWord,
+                caretOffset: newCaretOffset
+            )
+            let remainingSuggestion = Suggestion(
+                kind: suggestion.kind,
+                insertText: remaining,
+                displayText: remaining,
+                replaceRange: newCaretOffset..<newCaretOffset
+            )
+            active = (remainingSuggestion, newSnapshot)
+            present(remainingSuggestion, for: newSnapshot)
+        }
+
+        if Settings.shared.isLearningEnabled {
+            ngramModel.train(on: firstWord)
+        }
+        return true
     }
 
     private func dismissActive() -> Bool {
@@ -270,12 +323,34 @@ final class Coordinator {
 
         speechTranscriber.onTranscription = { [weak self] text in
             guard let self else { return }
-            self.isVoiceActive = false
-            self.overlay.hide()
-            if let focused = AccessibilityBridge.focusedElement(), !text.isEmpty {
-                AccessibilityBridge.replaceSelectedText(focused, with: text)
+            guard !text.isEmpty else {
+                self.isVoiceActive = false
+                self.overlay.hide()
+                self.lastProcessedSnapshot = nil
+                return
             }
-            self.lastProcessedSnapshot = nil
+            // Use LLM to clean up the transcription with screen context.
+            if self.llmPredictor.isReady {
+                let ctx = self.screenContext.context()
+                Task { @MainActor in
+                    let cleaned = await self.llmPredictor.cleanTranscription(
+                        raw: text, screenContext: ctx
+                    )
+                    self.isVoiceActive = false
+                    self.overlay.hide()
+                    if let focused = AccessibilityBridge.focusedElement() {
+                        AccessibilityBridge.replaceSelectedText(focused, with: cleaned ?? text)
+                    }
+                    self.lastProcessedSnapshot = nil
+                }
+            } else {
+                self.isVoiceActive = false
+                self.overlay.hide()
+                if let focused = AccessibilityBridge.focusedElement() {
+                    AccessibilityBridge.replaceSelectedText(focused, with: text)
+                }
+                self.lastProcessedSnapshot = nil
+            }
         }
         speechTranscriber.startListening()
     }

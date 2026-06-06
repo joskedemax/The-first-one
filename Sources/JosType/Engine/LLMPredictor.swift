@@ -60,7 +60,7 @@ final class LLMPredictor {
         }
     }
 
-    func predict(context: String, screenContext: String? = nil, maxTokens: Int = 20) async -> String? {
+    func predict(context: String, screenContext: String? = nil, maxTokens: Int = 50) async -> String? {
         guard status == .ready, let session = chatSession else { return nil }
 
         generationTask?.cancel()
@@ -71,7 +71,7 @@ final class LLMPredictor {
                 let response = try await session.respond(to: prompt)
                 if Task.isCancelled { return nil }
 
-                let cleaned = cleanResponse(response, maxLength: 60)
+                let cleaned = cleanResponse(response, maxLength: 150)
                 return cleaned.isEmpty ? nil : cleaned
             } catch {
                 if !Task.isCancelled {
@@ -91,6 +91,31 @@ final class LLMPredictor {
 
     var isReady: Bool { status == .ready }
 
+    func cleanTranscription(raw: String, screenContext: String?) async -> String? {
+        guard status == .ready, let session = chatSession else { return nil }
+        var prompt = ""
+        if let sc = screenContext, !sc.isEmpty {
+            prompt += "Context from the user's screen:\n\(String(sc.prefix(1500)))\n\n"
+        }
+        prompt += """
+        Clean up this voice transcription for insertion into a text field. \
+        Fix grammar, remove filler words (um, uh, like), fix punctuation, \
+        and use correct capitalization. Use any technical terms or names from \
+        the screen context if they match what was spoken. \
+        Output ONLY the cleaned text, nothing else:
+
+        \(raw)
+        """
+        do {
+            let response = try await session.respond(to: prompt)
+            let cleaned = response.trimmingCharacters(in: .whitespacesAndNewlines)
+            return cleaned.isEmpty ? nil : cleaned
+        } catch {
+            NSLog("JosType: transcription cleanup error: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     private func buildPrompt(context: String, screenContext: String?) -> String {
         var parts: [String] = []
         if let sc = screenContext, !sc.isEmpty {
@@ -99,7 +124,8 @@ final class LLMPredictor {
         let trimmed = String(context.suffix(500))
         parts.append("""
         Continue the following text naturally. Output ONLY the continuation, \
-        no explanations, no quotes. Keep it to one short sentence or phrase:
+        no explanations, no quotes. Write one or two complete sentences that \
+        flow naturally from what was written:
 
         \(trimmed)
         """)
