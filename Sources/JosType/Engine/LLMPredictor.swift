@@ -41,19 +41,14 @@ final class LLMPredictor {
         modelContainer = nil
         chatSession = nil
 
-        setStatus(.downloading(progress: 0))
+        setStatus(.loading)
 
         do {
-            setStatus(.loading)
-            let container = try await LLMModelFactory.shared.loadContainer(
+            let container = try await #huggingFaceLoadModelContainer(
                 configuration: model.registryConfig
-            ) { progress in
-                Task { @MainActor in
-                    self.setStatus(.downloading(progress: progress.fractionCompleted))
-                }
-            }
+            )
             modelContainer = container
-            chatSession = ChatSession(model: container)
+            chatSession = ChatSession(container)
             setStatus(.ready)
             NSLog("JosType: model \(model.rawValue) loaded successfully.")
         } catch {
@@ -74,8 +69,6 @@ final class LLMPredictor {
                 let response = try await session.respond(to: prompt)
                 if Task.isCancelled { return nil }
 
-                // Trim to a reasonable inline length — take up to first newline
-                // or sentence end, capped at ~60 chars.
                 let cleaned = cleanResponse(response, maxLength: 60)
                 return cleaned.isEmpty ? nil : cleaned
             } catch {
@@ -109,12 +102,10 @@ final class LLMPredictor {
     private func cleanResponse(_ response: String, maxLength: Int) -> String {
         var result = response.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Take only up to the first newline.
         if let newlineIdx = result.firstIndex(of: "\n") {
             result = String(result[result.startIndex..<newlineIdx])
         }
 
-        // If longer than maxLength, cut at the last word boundary before the limit.
         if result.count > maxLength {
             let prefix = String(result.prefix(maxLength))
             if let lastSpace = prefix.lastIndex(of: " ") {

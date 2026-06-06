@@ -4,6 +4,7 @@ import ApplicationServices
 /// The brain of the app: wires the focus tracker, prediction engine, overlay,
 /// and key tap together. Uses the LLM for high-quality predictions when
 /// available, falling back to the n-gram engine while the model loads.
+@MainActor
 final class Coordinator {
 
     private let ngramModel = LanguageModel()

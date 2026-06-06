@@ -25,7 +25,7 @@ enum Tokenizer {
     /// Parse the text that appears before the caret.
     static func analyze(_ textBeforeCaret: String) -> Context {
         let chars = Array(textBeforeCaret)
-        var end = chars.count
+        let end = chars.count
         var start = end
         // Walk back over the trailing word characters to isolate the current prefix.
         while start > 0 && isWordChar(chars[start - 1]) {
@@ -40,10 +40,9 @@ enum Tokenizer {
             // Skip separators.
             while i > 0 && !isWordChar(chars[i - 1]) { i -= 1 }
             guard i > 0 else { break }
-            var wEnd = i
+            let wEnd = i
             while i > 0 && isWordChar(chars[i - 1]) { i -= 1 }
             priorWords.append(String(chars[i..<wEnd]))
-            _ = wEnd
         }
         priorWords.reverse()
 
