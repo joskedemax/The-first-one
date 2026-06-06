@@ -17,7 +17,7 @@ final class Settings {
             Keys.enabled: true,
             Keys.learning: true,
             Keys.minPrefix: 2,
-            Keys.model: JosTypeModel.gemma4_4b.rawValue
+            Keys.model: JosTypeModel.smollm3_3b_base.rawValue
         ])
     }
 
@@ -43,8 +43,8 @@ final class Settings {
 
     var selectedModel: JosTypeModel {
         get {
-            let raw = defaults.string(forKey: Keys.model) ?? JosTypeModel.gemma4_4b.rawValue
-            return JosTypeModel(rawValue: raw) ?? .gemma4_4b
+            let raw = defaults.string(forKey: Keys.model) ?? JosTypeModel.smollm3_3b_base.rawValue
+            return JosTypeModel(rawValue: raw) ?? .smollm3_3b_base
         }
         set { defaults.set(newValue.rawValue, forKey: Keys.model) }
     }

@@ -1,32 +1,50 @@
 import Foundation
+import MLX
 import MLXLLM
 import MLXLMCommon
 import MLXHuggingFace
 import HuggingFace
 import Tokenizers
 
+/// Available on-device models.
+///
+/// Base (pretrained) models are best for autocomplete — their training objective
+/// *is* "continue the text", so they produce natural continuations instead of
+/// chatty instruction-following. Instruct models are kept as options.
 enum JosTypeModel: String, CaseIterable {
-    case gemma4_4b = "Gemma 4 4B"
-    case smollm3_3b = "SmolLM3 3B"
-    case gemma3_1b = "Gemma 3 1B"
+    case smollm3_3b_base = "SmolLM3 3B (base)"
+    case qwen3_1_7b_base = "Qwen3 1.7B (base)"
+    case gemma4_4b = "Gemma 4 4B (instruct)"
+    case gemma3_1b = "Gemma 3 1B (instruct)"
+
+    /// Whether this is a base/pretrained model (use raw completion, no chat template).
+    var isBase: Bool {
+        switch self {
+        case .smollm3_3b_base, .qwen3_1_7b_base: return true
+        case .gemma4_4b, .gemma3_1b: return false
+        }
+    }
 
     var registryConfig: ModelConfiguration {
         switch self {
+        case .smollm3_3b_base: return ModelConfiguration(id: "mlx-community/SmolLM3-3B-Base-4bit")
+        case .qwen3_1_7b_base: return ModelConfiguration(id: "mlx-community/Qwen3-1.7B-Base-4bit")
         case .gemma4_4b: return LLMRegistry.gemma4_e4b_it_4bit
-        case .smollm3_3b: return LLMRegistry.smollm3_3b_4bit
         case .gemma3_1b: return LLMRegistry.gemma3_1B_qat_4bit
         }
     }
 
     var displayDescription: String {
         switch self {
-        case .gemma4_4b: return "Best quality, ~2.5 GB"
-        case .smollm3_3b: return "Good quality, ~1.8 GB"
+        case .smollm3_3b_base: return "Best quality, ~1.8 GB"
+        case .qwen3_1_7b_base: return "Fast & good, ~1 GB"
+        case .gemma4_4b: return "Instruct, ~2.5 GB"
         case .gemma3_1b: return "Fastest, ~800 MB"
         }
     }
 }
 
+/// Manages a local LLM for high-quality text prediction using Apple MLX.
 @MainActor
 final class LLMPredictor {
 
@@ -71,28 +89,45 @@ final class LLMPredictor {
 
         generationTask?.cancel()
 
-        let prompt = buildPrompt(context: context, screenContext: screenContext)
+        let isBase = currentModel?.isBase ?? false
 
         let task = Task<String?, Never> {
-            do {
-                // Use a fresh ChatSession each time to avoid history accumulation.
-                let session = ChatSession(container)
-                let response = try await session.respond(to: prompt)
-                if Task.isCancelled { return nil }
-
-                let cleaned = cleanResponse(response, maxLength: 200)
-                // Reject degenerate output: too short, or just echoes the context tail.
-                guard cleaned.count >= 2 else { return nil }
-                let contextTail = String(context.suffix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
-                if !contextTail.isEmpty && cleaned.lowercased() == contextTail.lowercased() { return nil }
-                NSLog("JosType: prediction (\(cleaned.count) chars): \(cleaned.prefix(80))…")
-                return cleaned
-            } catch {
-                if !Task.isCancelled {
-                    NSLog("JosType: prediction error: \(error.localizedDescription)")
+            let raw: String?
+            if isBase {
+                let prompt = buildBasePrompt(context: context, screenContext: screenContext)
+                raw = await self.rawComplete(container: container, prompt: prompt, maxTokens: maxTokens)
+            } else {
+                let prompt = buildInstructPrompt(context: context, screenContext: screenContext)
+                do {
+                    let session = ChatSession(container)
+                    raw = try await session.respond(to: prompt)
+                } catch {
+                    if !Task.isCancelled {
+                        NSLog("JosType: prediction error: \(error.localizedDescription)")
+                    }
+                    raw = nil
                 }
-                return nil
             }
+
+            guard let response = raw, !Task.isCancelled else { return nil }
+
+            var cleaned = cleanResponse(response, maxLength: 200)
+            guard cleaned.count >= 2 else { return nil }
+
+            // Reject degenerate output that just echoes the context tail.
+            let contextTail = String(context.suffix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !contextTail.isEmpty && cleaned.lowercased() == contextTail.lowercased() { return nil }
+
+            // Preserve a word boundary: if the user's text ends mid-token and the
+            // completion starts with a word char, insert a leading space so we
+            // don't jam words together ("the" + "store" -> "the store").
+            if let last = context.last, !last.isWhitespace,
+               let first = cleaned.first, (first.isLetter || first.isNumber) {
+                cleaned = " " + cleaned
+            }
+
+            NSLog("JosType: prediction (\(cleaned.count) chars): \(cleaned.prefix(80))…")
+            return cleaned
         }
         generationTask = task
         return await task.value
@@ -113,9 +148,10 @@ final class LLMPredictor {
         }
         prompt += """
         Clean up this voice transcription for insertion into a text field. \
-        Fix grammar, remove filler words (um, uh, like), fix punctuation, \
-        and use correct capitalization. Use any technical terms or names from \
-        the screen context if they match what was spoken. \
+        Fix grammar and punctuation, remove filler words (um, uh, like), and use \
+        correct capitalization. Resolve self-corrections (e.g. "5pm, actually 6pm" \
+        becomes "6pm"). Never reword or add content that wasn't spoken — only fix \
+        errors. Use technical terms or names from the screen context if they match. \
         Output ONLY the cleaned text, nothing else:
 
         \(raw)
@@ -131,9 +167,56 @@ final class LLMPredictor {
         }
     }
 
-    private func buildPrompt(context: String, screenContext: String?) -> String {
-        let trimmed = String(context.suffix(600))
+    // MARK: - Raw completion (base models)
 
+    /// Generate a raw continuation without applying any chat template — the
+    /// correct path for base/pretrained models.
+    private func rawComplete(container: ModelContainer, prompt: String, maxTokens: Int) async -> String? {
+        do {
+            let text = try await container.perform { (context: ModelContext) -> String in
+                let tokens = context.tokenizer.encode(text: prompt)
+                let input = LMInput(tokens: MLXArray(tokens))
+                let params = GenerateParameters(
+                    maxTokens: maxTokens,
+                    temperature: 0.3,
+                    topP: 0.95,
+                    repetitionPenalty: 1.1
+                )
+                var output = ""
+                let stream = try MLXLMCommon.generate(
+                    input: input, cache: nil, parameters: params, context: context
+                )
+                for await item in stream {
+                    if case .chunk(let s) = item {
+                        output += s
+                        if output.count > 250 { break }
+                    }
+                }
+                return output
+            }
+            return text
+        } catch {
+            NSLog("JosType: raw completion error: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    // MARK: - Prompts
+
+    /// For base models: just give the text to continue. Optionally prepend a
+    /// short context paragraph so the continuation is informed by the screen.
+    private func buildBasePrompt(context: String, screenContext: String?) -> String {
+        let trimmed = String(context.suffix(600))
+        if let sc = screenContext, !sc.isEmpty {
+            let ctx = String(sc.prefix(800))
+            return "\(ctx)\n\n\(trimmed)"
+        }
+        return trimmed
+    }
+
+    /// For instruct models: explicit instruction to continue.
+    private func buildInstructPrompt(context: String, screenContext: String?) -> String {
+        let trimmed = String(context.suffix(600))
         var prompt = ""
         if let sc = screenContext, !sc.isEmpty {
             prompt += "The user has the following visible on their screen:\n\(String(sc.prefix(1500)))\n\n"
@@ -153,7 +236,6 @@ final class LLMPredictor {
     private func cleanResponse(_ response: String, maxLength: Int) -> String {
         var result = response.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Remove any leading quotes the model may have added.
         while result.hasPrefix("\"") || result.hasPrefix("'") || result.hasPrefix("`") {
             result = String(result.dropFirst())
         }
@@ -161,7 +243,7 @@ final class LLMPredictor {
             result = String(result.dropLast())
         }
 
-        // Take up to two sentences (stop at second sentence-ending punctuation).
+        // Take up to two sentences.
         var sentenceEnds = 0
         var cutoff = result.endIndex
         for i in result.indices {
