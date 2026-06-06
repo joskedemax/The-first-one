@@ -7,6 +7,10 @@ import ApplicationServices
 @MainActor
 final class Coordinator {
 
+    private static let llmDebounceDelay: TimeInterval = 0.35
+    private static let trainingSaveDelay: TimeInterval = 2.0
+    private static let maxLLMTokens = 80
+
     private let ngramModel = LanguageModel()
     private let ngramEngine: PredictionEngine
     private let llmPredictor = LLMPredictor()
@@ -21,10 +25,8 @@ final class Coordinator {
     private var saveWorkItem: DispatchWorkItem?
     private var llmWorkItem: DispatchWorkItem?
     private let screenContext = ScreenContextProvider()
-    private let speechTranscriber = SpeechTranscriber()
     private let invocationFilter = InvocationFilter()
-    private let recordingIndicator = RecordingIndicator()
-    private var isVoiceActive = false
+    private let voiceCapture = VoiceCaptureController()
 
     init() {
         ngramEngine = PredictionEngine(model: ngramModel)
@@ -44,13 +46,13 @@ final class Coordinator {
         }
         keyTap.hasActiveSuggestion = { [weak self] in
             guard let self else { return false }
-            return self.active != nil || self.isVoiceActive
+            return self.active != nil || self.voiceCapture.isActive
         }
         keyTap.onAcceptWord = { [weak self] in self?.acceptNextWord() ?? false }
         keyTap.onAcceptAll = { [weak self] in self?.acceptAll() ?? false }
         keyTap.onDismiss = { [weak self] in
             guard let self else { return false }
-            if self.isVoiceActive { return self.cancelVoice() }
+            if self.voiceCapture.isActive { return self.voiceCapture.cancel() }
             return self.dismissActive()
         }
 
@@ -68,7 +70,7 @@ final class Coordinator {
         focusTracker.stop()
         keyTap.stop()
         llmPredictor.cancelPendingPrediction()
-        speechTranscriber.cancelListening()
+        _ = voiceCapture.cancel()
         clearSuggestion()
         llmWorkItem?.cancel()
         llmWorkItem = nil
@@ -108,7 +110,7 @@ final class Coordinator {
             clearSuggestion()
             return
         }
-        guard !isVoiceActive else { return }
+        guard !voiceCapture.isActive else { return }
 
         // Deduplicate: skip if text and caret haven't changed.
         if let last = lastProcessedSnapshot,
@@ -168,7 +170,7 @@ final class Coordinator {
                 _ = await self.llmPredictor.predictStreaming(
                     context: textBeforeCaret,
                     screenContext: visibleContext,
-                    maxTokens: 80
+                    maxTokens: Self.maxLLMTokens
                 ) { [weak self] partialText in
                     guard let self else { return }
 
@@ -193,7 +195,7 @@ final class Coordinator {
             }
         }
         llmWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.llmDebounceDelay, execute: work)
     }
 
     private func currentTextBeforeCaret() -> String? {
@@ -257,6 +259,10 @@ final class Coordinator {
 
     private func acceptAll() -> Bool {
         guard let (suggestion, snapshot) = active else { return false }
+        guard isFocusStillValid(snapshot) else {
+            clearSuggestion()
+            return false
+        }
         let ok = TextInserter.apply(suggestion, to: snapshot.element, fullText: snapshot.fullText)
         clearSuggestion()
         lastProcessedSnapshot = nil
@@ -269,6 +275,10 @@ final class Coordinator {
 
     private func acceptNextWord() -> Bool {
         guard let (suggestion, snapshot) = active else { return false }
+        guard isFocusStillValid(snapshot) else {
+            clearSuggestion()
+            return false
+        }
         let text = suggestion.insertText
         guard !text.isEmpty else { return false }
 
@@ -326,6 +336,13 @@ final class Coordinator {
         return true
     }
 
+    private func isFocusStillValid(_ snapshot: TextSnapshot) -> Bool {
+        guard let focused = AccessibilityBridge.focusedElement(),
+              let snapshotPID = AccessibilityBridge.pid(of: snapshot.element),
+              let currentPID = AccessibilityBridge.pid(of: focused) else { return false }
+        return snapshotPID == currentPID
+    }
+
     private func clearSuggestion() {
         active = nil
         overlay.hide()
@@ -334,102 +351,19 @@ final class Coordinator {
     // MARK: - Voice capture
 
     private func startVoiceCapture(element: AXUIElement, fullText: String, triggerRange: Range<Int>) {
-        isVoiceActive = true
         clearSuggestion()
         lastProcessedSnapshot = nil
 
-        let utf16Start = utf16Index(in: fullText, characterOffset: triggerRange.lowerBound)
-        let utf16End = utf16Index(in: fullText, characterOffset: triggerRange.upperBound)
-        let cfRange = CFRange(location: utf16Start, length: utf16End - utf16Start)
-        if !AccessibilityBridge.setSelectedRange(element, cfRange) {
-            NSLog("JosType: failed to select trigger phrase range for deletion")
+        voiceCapture.onFinished = { [weak self] in
+            self?.lastProcessedSnapshot = nil
         }
-        if !AccessibilityBridge.replaceSelectedText(element, with: "") {
-            NSLog("JosType: failed to delete trigger phrase from field")
-        }
-
-        // Show floating recording pill near caret.
-        if let rect = AccessibilityBridge.boundsForRange(element, CFRange(location: utf16Start, length: 0)) {
-            recordingIndicator.show(near: rect)
-        }
-
-        // Bias recognition with words from the screen context.
-        let ctx = screenContext.context()
-        if let ctx, !ctx.isEmpty {
-            let words = extractContextualWords(from: ctx)
-            speechTranscriber.contextualStrings = words
-        } else {
-            speechTranscriber.contextualStrings = []
-        }
-
-        speechTranscriber.onPartialResult = { [weak self] partial in
-            self?.recordingIndicator.updatePartialText(partial)
-        }
-
-        speechTranscriber.onTranscription = { [weak self] text in
-            guard let self else { return }
-            guard !text.isEmpty else {
-                self.recordingIndicator.updatePartialText("Voice capture failed")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                    self?.isVoiceActive = false
-                    self?.recordingIndicator.hide()
-                    self?.lastProcessedSnapshot = nil
-                }
-                return
-            }
-            self.recordingIndicator.showProcessing()
-
-            if self.llmPredictor.isReady {
-                Task { @MainActor in
-                    let cleaned = await self.llmPredictor.cleanTranscription(
-                        raw: text, screenContext: ctx
-                    )
-                    self.isVoiceActive = false
-                    self.recordingIndicator.hide()
-                    if let focused = AccessibilityBridge.focusedElement() {
-                        AccessibilityBridge.replaceSelectedText(focused, with: cleaned ?? text)
-                    }
-                    self.lastProcessedSnapshot = nil
-                }
-            } else {
-                self.isVoiceActive = false
-                self.recordingIndicator.hide()
-                if let focused = AccessibilityBridge.focusedElement() {
-                    AccessibilityBridge.replaceSelectedText(focused, with: text)
-                }
-                self.lastProcessedSnapshot = nil
-            }
-        }
-        speechTranscriber.startListening()
-    }
-
-    private func cancelVoice() -> Bool {
-        guard isVoiceActive else { return false }
-        speechTranscriber.cancelListening()
-        isVoiceActive = false
-        recordingIndicator.hide()
-        lastProcessedSnapshot = nil
-        return true
-    }
-
-    private func extractContextualWords(from context: String) -> [String] {
-        let words = context.components(separatedBy: .whitespacesAndNewlines)
-        var unique = Set<String>()
-        var result: [String] = []
-        for word in words {
-            let cleaned = word.trimmingCharacters(in: .punctuationCharacters)
-            if cleaned.count >= 4 && cleaned.first?.isUppercase == true && unique.insert(cleaned).inserted {
-                result.append(cleaned)
-                if result.count >= 50 { break }
-            }
-        }
-        return result
-    }
-
-    private func utf16Index(in string: String, characterOffset: Int) -> Int {
-        let clamped = max(0, min(characterOffset, string.count))
-        let idx = string.index(string.startIndex, offsetBy: clamped)
-        return string.utf16.distance(from: string.startIndex, to: idx)
+        voiceCapture.start(
+            element: element,
+            fullText: fullText,
+            triggerRange: triggerRange,
+            screenContext: screenContext.context(),
+            llmPredictor: llmPredictor
+        )
     }
 
     // MARK: - Training
@@ -447,6 +381,6 @@ final class Coordinator {
             self.ngramModel.save()
         }
         saveWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.trainingSaveDelay, execute: work)
     }
 }

@@ -25,11 +25,19 @@ final class LanguageModel {
               let text = try? String(contentsOf: url, encoding: .utf8) else {
             return
         }
+        var entries: [(String, Int)] = []
         for line in text.split(separator: "\n") {
             let parts = line.split(separator: "\t")
             guard let word = parts.first.map(String.init) else { continue }
             let freq = parts.count > 1 ? Int(parts[1]) ?? 1 : 1
-            insertUnigram(word.lowercased(), count: freq)
+            entries.append((word.lowercased(), freq))
+        }
+        // Single barrier block so seed loading is atomic w.r.t. concurrent train() calls.
+        queue.async(flags: .barrier) {
+            for (word, freq) in entries {
+                self.unigrams[word, default: 0] += freq
+                self.trie.insert(word, frequency: freq)
+            }
         }
     }
 

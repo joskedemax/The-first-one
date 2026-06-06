@@ -29,6 +29,7 @@ final class SuggestionOverlay {
         window.ignoresMouseEvents = true
         window.hasShadow = false
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        window.setAccessibilityElement(false)
         window.contentView?.addSubview(label)
     }
 

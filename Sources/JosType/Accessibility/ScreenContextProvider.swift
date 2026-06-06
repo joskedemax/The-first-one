@@ -8,23 +8,37 @@ final class ScreenContextProvider {
     private var lastRefresh: Date = .distantPast
     private let refreshInterval: TimeInterval = 5.0
     private let maxContextLength = 2000
+    private var refreshInFlight = false
 
-    func context() -> String {
+    func context() -> String? {
         if Date().timeIntervalSince(lastRefresh) > refreshInterval {
-            refresh()
+            scheduleRefresh()
         }
-        return cachedContext
+        return cachedContext.isEmpty ? nil : cachedContext
     }
 
-    private func refresh() {
+    private func scheduleRefresh() {
+        guard !refreshInFlight else { return }
+        refreshInFlight = true
         lastRefresh = Date()
         let ownPID = ProcessInfo.processInfo.processIdentifier
+        let maxLen = maxContextLength
 
+        Task.detached { [weak self] in
+            guard let self else { return }
+            let result = Self.gatherContext(ownPID: ownPID, maxLength: maxLen)
+            await MainActor.run {
+                self.cachedContext = result
+                self.refreshInFlight = false
+            }
+        }
+    }
+
+    private static func gatherContext(ownPID: pid_t, maxLength: Int) -> String {
         guard let windowList = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
         ) as? [[String: Any]] else {
-            cachedContext = ""
-            return
+            return ""
         }
 
         var seenPIDs = Set<pid_t>()
@@ -42,17 +56,17 @@ final class ScreenContextProvider {
             extractText(from: appElement, depth: 0, maxDepth: 3, texts: &extracted)
 
             for t in extracted {
-                if totalLength + t.count > maxContextLength { break }
+                if totalLength + t.count > maxLength { break }
                 texts.append(t)
                 totalLength += t.count
             }
-            if totalLength >= maxContextLength { break }
+            if totalLength >= maxLength { break }
         }
 
-        cachedContext = texts.joined(separator: "\n")
+        return texts.joined(separator: "\n")
     }
 
-    private func extractText(from element: AXUIElement, depth: Int, maxDepth: Int, texts: inout [String]) {
+    private static func extractText(from element: AXUIElement, depth: Int, maxDepth: Int, texts: inout [String]) {
         guard depth < maxDepth else { return }
 
         if let value = AccessibilityBridge.string(element, kAXValueAttribute as String),

@@ -101,9 +101,7 @@ final class SpeechTranscriber {
     private func resetSilenceTimer() {
         silenceTimer?.invalidate()
         silenceTimer = Timer.scheduledTimer(withTimeInterval: silenceTimeout, repeats: false) { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.finishRecording()
-            }
+            self?.finishRecording()
         }
     }
 

@@ -11,6 +11,7 @@ struct TextSnapshot {
 /// Watches the system for focus and text changes in editable fields and
 /// reports snapshots. Uses AX observers on the frontmost app, refreshing the
 /// observer when the active application changes.
+@MainActor
 final class FocusTracker {
 
     var onChange: ((TextSnapshot?) -> Void)?
@@ -52,7 +53,7 @@ final class FocusTracker {
         let callback: AXObserverCallback = { _, _, _, refcon in
             guard let refcon else { return }
             let tracker = Unmanaged<FocusTracker>.fromOpaque(refcon).takeUnretainedValue()
-            tracker.emitCurrentSnapshot()
+            MainActor.assumeIsolated { tracker.emitCurrentSnapshot() }
         }
         guard AXObserverCreate(pid, callback, &obs) == .success, let observer = obs else { return }
         self.observer = observer
@@ -67,7 +68,7 @@ final class FocusTracker {
             AXObserverAddNotification(observer, appElement, note as CFString, refcon)
         }
         CFRunLoopAddSource(
-            CFRunLoopGetCurrent(),
+            CFRunLoopGetMain(),
             AXObserverGetRunLoopSource(observer),
             .defaultMode
         )
@@ -77,7 +78,7 @@ final class FocusTracker {
     private func teardownObserver() {
         if let observer {
             CFRunLoopRemoveSource(
-                CFRunLoopGetCurrent(),
+                CFRunLoopGetMain(),
                 AXObserverGetRunLoopSource(observer),
                 .defaultMode
             )
