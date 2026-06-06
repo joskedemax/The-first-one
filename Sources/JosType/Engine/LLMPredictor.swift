@@ -1,40 +1,21 @@
 import Foundation
-import LocalLLMClient
-import LocalLLMClientLlama
+import MLXLLM
+import MLXLMCommon
+import MLXHuggingFace
 
 /// Available on-device models, smallest to largest.
 enum JosTypeModel: String, CaseIterable {
     case gemma3_1b = "Gemma 3 1B"
-    case gemma4_e2b = "Gemma 4 E2B"
-    case gemma3_4b = "Gemma 3 4B"
 
-    var hfRepo: String {
+    var registryConfig: ModelConfiguration {
         switch self {
-        case .gemma3_1b:  return "lmstudio-community/gemma-3-1B-it-qat-GGUF"
-        case .gemma4_e2b: return "lmstudio-community/gemma-4-2B-it-qat-GGUF"
-        case .gemma3_4b:  return "lmstudio-community/gemma-3-4B-it-qat-GGUF"
-        }
-    }
-
-    var ggufFilename: String {
-        switch self {
-        case .gemma3_1b:  return "gemma-3-1B-it-QAT-Q4_0.gguf"
-        case .gemma4_e2b: return "gemma-4-2B-it-QAT-Q4_0.gguf"
-        case .gemma3_4b:  return "gemma-3-4B-it-QAT-Q4_0.gguf"
-        }
-    }
-
-    var contextSize: Int {
-        switch self {
-        case .gemma3_1b:  return 2048
-        case .gemma4_e2b: return 2048
-        case .gemma3_4b:  return 4096
+        case .gemma3_1b: return LLMRegistry.gemma3_1B_qat_4bit
         }
     }
 }
 
-/// Manages a local LLM for high-quality text prediction. Downloads the model
-/// on first use and persists it to Application Support.
+/// Manages a local LLM for high-quality text prediction using Apple MLX.
+/// Downloads the model from HuggingFace on first use and caches it locally.
 @MainActor
 final class LLMPredictor {
 
@@ -49,25 +30,30 @@ final class LLMPredictor {
     private(set) var status: Status = .idle
     var onStatusChange: ((Status) -> Void)?
 
-    private var session: LLMSession?
+    private var modelContainer: ModelContainer?
+    private var chatSession: ChatSession?
     private var currentModel: JosTypeModel?
     private var generationTask: Task<String?, Never>?
 
-    /// Load a model. Downloads from HuggingFace if not cached locally.
     func loadModel(_ model: JosTypeModel) async {
         if currentModel == model && status == .ready { return }
         currentModel = model
-        session = nil
+        modelContainer = nil
+        chatSession = nil
 
         setStatus(.downloading(progress: 0))
 
         do {
-            let llmModel = LLMModel.llama(
-                id: model.hfRepo,
-                model: model.ggufFilename
-            )
             setStatus(.loading)
-            session = LLMSession(model: llmModel)
+            let container = try await LLMModelFactory.shared.loadContainer(
+                configuration: model.registryConfig
+            ) { progress in
+                Task { @MainActor in
+                    self.setStatus(.downloading(progress: progress.fractionCompleted))
+                }
+            }
+            modelContainer = container
+            chatSession = ChatSession(model: container)
             setStatus(.ready)
             NSLog("JosType: model \(model.rawValue) loaded successfully.")
         } catch {
@@ -77,37 +63,27 @@ final class LLMPredictor {
         }
     }
 
-    /// Generate a short inline completion for the given context.
-    /// Returns the predicted continuation, or nil on failure/timeout.
     func predict(context: String, maxTokens: Int = 20) async -> String? {
-        guard status == .ready, let session else { return nil }
+        guard status == .ready, let session = chatSession else { return nil }
 
         generationTask?.cancel()
 
         let prompt = buildPrompt(context: context)
         let task = Task<String?, Never> {
-            var result = ""
             do {
-                for try await token in session.streamResponse(to: prompt) {
-                    if Task.isCancelled { return nil }
-                    result += token
-                    // Stop at sentence boundaries or newlines for inline suggestions.
-                    if result.count >= maxTokens { break }
-                    if result.contains("\n") {
-                        result = String(result.prefix(while: { $0 != "\n" }))
-                        break
-                    }
-                    if let last = result.last, ".!?".contains(last) && result.count > 3 {
-                        break
-                    }
-                }
+                let response = try await session.respond(to: prompt)
+                if Task.isCancelled { return nil }
+
+                // Trim to a reasonable inline length — take up to first newline
+                // or sentence end, capped at ~60 chars.
+                let cleaned = cleanResponse(response, maxLength: 60)
+                return cleaned.isEmpty ? nil : cleaned
             } catch {
                 if !Task.isCancelled {
                     NSLog("JosType: prediction error: \(error.localizedDescription)")
                 }
                 return nil
             }
-            return result.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : result
         }
         generationTask = task
         return await task.value
@@ -121,7 +97,6 @@ final class LLMPredictor {
     var isReady: Bool { status == .ready }
 
     private func buildPrompt(context: String) -> String {
-        // Use a completion-style prompt that tells the model to continue text.
         let trimmed = String(context.suffix(500))
         return """
         Continue the following text naturally. Output ONLY the continuation, \
@@ -129,6 +104,27 @@ final class LLMPredictor {
 
         \(trimmed)
         """
+    }
+
+    private func cleanResponse(_ response: String, maxLength: Int) -> String {
+        var result = response.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Take only up to the first newline.
+        if let newlineIdx = result.firstIndex(of: "\n") {
+            result = String(result[result.startIndex..<newlineIdx])
+        }
+
+        // If longer than maxLength, cut at the last word boundary before the limit.
+        if result.count > maxLength {
+            let prefix = String(result.prefix(maxLength))
+            if let lastSpace = prefix.lastIndex(of: " ") {
+                result = String(prefix[prefix.startIndex..<lastSpace])
+            } else {
+                result = prefix
+            }
+        }
+
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func setStatus(_ s: Status) {
