@@ -22,6 +22,7 @@ final class Coordinator {
     private var llmWorkItem: DispatchWorkItem?
     private let screenContext = ScreenContextProvider()
     private let speechTranscriber = SpeechTranscriber()
+    private let invocationFilter = InvocationFilter()
     private var isVoiceActive = false
 
     init() {
@@ -131,8 +132,19 @@ final class Coordinator {
             present(ngramSuggestion, for: snapshot)
         }
 
+        // Gate the (expensive) LLM continuation through the invocation filter
+        // so we only fire it at sensible moments — not mid-word, not on thin
+        // context, and not right after the user rejected a suggestion.
         if llmPredictor.isReady {
-            scheduleLLMPrediction(textBeforeCaret: textBeforeCaret, snapshot: snapshot)
+            let textAfterCaret = String(snapshot.fullText.dropFirst(snapshot.caretOffset))
+            let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            if invocationFilter.shouldSuggestContinuation(
+                textBeforeCaret: textBeforeCaret,
+                textAfterCaret: textAfterCaret,
+                bundleID: bundleID
+            ) {
+                scheduleLLMPrediction(textBeforeCaret: textBeforeCaret, snapshot: snapshot)
+            }
         }
     }
 
@@ -229,6 +241,7 @@ final class Coordinator {
         let ok = TextInserter.apply(suggestion, to: snapshot.element, fullText: snapshot.fullText)
         clearSuggestion()
         lastProcessedSnapshot = nil
+        invocationFilter.noteAccepted()
         if Settings.shared.isLearningEnabled {
             ngramModel.train(on: suggestion.insertText)
         }
@@ -280,6 +293,7 @@ final class Coordinator {
             present(remainingSuggestion, for: newSnapshot)
         }
 
+        invocationFilter.noteAccepted()
         if Settings.shared.isLearningEnabled {
             ngramModel.train(on: firstWord)
         }
@@ -289,6 +303,7 @@ final class Coordinator {
     private func dismissActive() -> Bool {
         guard active != nil else { return false }
         clearSuggestion()
+        invocationFilter.noteRejected()
         return true
     }
 

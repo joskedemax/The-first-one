@@ -81,8 +81,12 @@ final class LLMPredictor {
                 if Task.isCancelled { return nil }
 
                 let cleaned = cleanResponse(response, maxLength: 200)
+                // Reject degenerate output: too short, or just echoes the context tail.
+                guard cleaned.count >= 2 else { return nil }
+                let contextTail = String(context.suffix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !contextTail.isEmpty && cleaned.lowercased() == contextTail.lowercased() { return nil }
                 NSLog("JosType: prediction (\(cleaned.count) chars): \(cleaned.prefix(80))…")
-                return cleaned.isEmpty ? nil : cleaned
+                return cleaned
             } catch {
                 if !Task.isCancelled {
                     NSLog("JosType: prediction error: \(error.localizedDescription)")
