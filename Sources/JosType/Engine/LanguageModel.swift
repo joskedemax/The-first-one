@@ -15,7 +15,7 @@ final class LanguageModel {
     /// trigrams["the quick"] -> ["brown": 2, ...]
     private var trigrams: [String: [String: Int]] = [:]
 
-    private let queue = DispatchQueue(label: "app.glide.languagemodel", attributes: .concurrent)
+    private let queue = DispatchQueue(label: "app.jostype.languagemodel", attributes: .concurrent)
 
     // MARK: - Seeding
 
@@ -102,7 +102,7 @@ final class LanguageModel {
     private static var storeURL: URL {
         let base = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Glide", isDirectory: true)
+            .appendingPathComponent("JosType", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         return base.appendingPathComponent("model.json")
     }

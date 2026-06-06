@@ -1,6 +1,5 @@
 import AppKit
 
-/// Owns the menu-bar item and its menu.
 final class StatusBarController {
 
     private let statusItem: NSStatusItem
@@ -10,6 +9,9 @@ final class StatusBarController {
         title: "Enabled", action: #selector(toggleEnabled), keyEquivalent: "")
     private let learningItem = NSMenuItem(
         title: "Learn from my typing", action: #selector(toggleLearning), keyEquivalent: "")
+    private let modelStatusItem = NSMenuItem(title: "Model: loading…", action: nil, keyEquivalent: "")
+
+    private var modelMenuItems: [NSMenuItem] = []
 
     init(coordinator: Coordinator) {
         self.coordinator = coordinator
@@ -20,9 +22,8 @@ final class StatusBarController {
 
     private func configureButton() {
         if let button = statusItem.button {
-            // SF Symbol if available, else a glyph fallback.
             if let image = NSImage(
-                systemSymbolName: "sparkles", accessibilityDescription: "Glide") {
+                systemSymbolName: "sparkles", accessibilityDescription: "JosType") {
                 button.image = image
             } else {
                 button.title = "✦"
@@ -43,6 +44,32 @@ final class StatusBarController {
 
         menu.addItem(.separator())
 
+        // Model status
+        modelStatusItem.isEnabled = false
+        menu.addItem(modelStatusItem)
+        updateModelStatus()
+
+        // Model selection submenu
+        let modelMenu = NSMenu()
+        for model in JosTypeModel.allCases {
+            let item = NSMenuItem(
+                title: model.rawValue,
+                action: #selector(selectModel(_:)),
+                keyEquivalent: "")
+            item.target = self
+            item.representedObject = model
+            if model == Settings.shared.selectedModel {
+                item.state = .on
+            }
+            modelMenu.addItem(item)
+            modelMenuItems.append(item)
+        }
+        let modelItem = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
+        modelItem.submenu = modelMenu
+        menu.addItem(modelItem)
+
+        menu.addItem(.separator())
+
         let permItem = NSMenuItem(
             title: "Check Permissions…",
             action: #selector(checkPermissions),
@@ -51,18 +78,33 @@ final class StatusBarController {
         menu.addItem(permItem)
 
         let aboutItem = NSMenuItem(
-            title: "About Glide", action: #selector(about), keyEquivalent: "")
+            title: "About JosType", action: #selector(about), keyEquivalent: "")
         aboutItem.target = self
         menu.addItem(aboutItem)
 
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(
-            title: "Quit Glide", action: #selector(quit), keyEquivalent: "q")
+            title: "Quit JosType", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
         statusItem.menu = menu
+    }
+
+    func updateModelStatus() {
+        switch coordinator.modelStatus {
+        case .idle:
+            modelStatusItem.title = "Model: not loaded"
+        case .downloading(let progress):
+            modelStatusItem.title = "Model: downloading \(Int(progress * 100))%…"
+        case .loading:
+            modelStatusItem.title = "Model: loading…"
+        case .ready:
+            modelStatusItem.title = "Model: \(Settings.shared.selectedModel.rawValue) ✓"
+        case .failed(let msg):
+            modelStatusItem.title = "Model: failed — \(msg)"
+        }
     }
 
     @objc private func toggleEnabled() {
@@ -78,21 +120,35 @@ final class StatusBarController {
         learningItem.state = newValue ? .on : .off
     }
 
+    @objc private func selectModel(_ sender: NSMenuItem) {
+        guard let model = sender.representedObject as? JosTypeModel else { return }
+        for item in modelMenuItems { item.state = .off }
+        sender.state = .on
+        coordinator.switchModel(model)
+        updateModelStatus()
+    }
+
     @objc private func checkPermissions() {
         let trusted = AccessibilityBridge.isTrusted(prompt: true)
         let alert = NSAlert()
         alert.messageText = trusted ? "Accessibility: granted" : "Accessibility: not granted"
         alert.informativeText = trusted
-            ? "Glide can read text fields. If suggestions still don't appear, also enable Input Monitoring in System Settings → Privacy & Security."
-            : "Enable Glide under System Settings → Privacy & Security → Accessibility, and also under Input Monitoring."
+            ? "JosType can read text fields. If Tab doesn't work, also enable Input Monitoring in System Settings → Privacy & Security."
+            : "Enable JosType under System Settings → Privacy & Security → Accessibility, and also under Input Monitoring."
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
 
     @objc private func about() {
         let alert = NSAlert()
-        alert.messageText = "Glide"
-        alert.informativeText = "Smart, private, on-device autocomplete for Mac.\nPress Tab to accept a suggestion, Esc to dismiss."
+        alert.messageText = "JosType"
+        alert.informativeText = """
+        Smart, private, on-device autocomplete for Mac.
+        Powered by Gemma — runs entirely on your machine.
+
+        Tab / Right Arrow → accept suggestion
+        Esc → dismiss
+        """
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }

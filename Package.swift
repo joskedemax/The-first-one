@@ -2,14 +2,21 @@
 import PackageDescription
 
 let package = Package(
-    name: "Glide",
+    name: "JosType",
     platforms: [
         .macOS(.v13)
     ],
+    dependencies: [
+        .package(url: "https://github.com/tattn/LocalLLMClient.git", branch: "main")
+    ],
     targets: [
         .executableTarget(
-            name: "Glide",
-            path: "Sources/Glide",
+            name: "JosType",
+            dependencies: [
+                .product(name: "LocalLLMClient", package: "LocalLLMClient"),
+                .product(name: "LocalLLMClientLlama", package: "LocalLLMClient")
+            ],
+            path: "Sources/JosType",
             resources: [
                 .process("Resources")
             ],

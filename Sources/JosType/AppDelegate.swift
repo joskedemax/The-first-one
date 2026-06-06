@@ -13,7 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Prompt for Accessibility up front so the user knows what's needed.
         if !AccessibilityBridge.isTrusted(prompt: true) {
-            NSLog("Glide: waiting for Accessibility permission.")
+            NSLog("JosType: waiting for Accessibility permission.")
         }
 
         coordinator.start()

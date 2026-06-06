@@ -1,39 +1,45 @@
 import Foundation
 
-/// User-facing preferences, backed by `UserDefaults`.
 final class Settings {
     static let shared = Settings()
     private let defaults = UserDefaults.standard
 
     private enum Keys {
-        static let enabled = "glide.enabled"
-        static let learning = "glide.learning"
-        static let minPrefix = "glide.minPrefixLength"
+        static let enabled = "jostype.enabled"
+        static let learning = "jostype.learning"
+        static let minPrefix = "jostype.minPrefixLength"
+        static let model = "jostype.selectedModel"
     }
 
     private init() {
         defaults.register(defaults: [
             Keys.enabled: true,
             Keys.learning: true,
-            Keys.minPrefix: 2
+            Keys.minPrefix: 2,
+            Keys.model: JosTypeModel.gemma3_1b.rawValue
         ])
     }
 
-    /// Master on/off for suggestions.
     var isEnabled: Bool {
         get { defaults.bool(forKey: Keys.enabled) }
         set { defaults.set(newValue, forKey: Keys.enabled) }
     }
 
-    /// Whether Glide trains on the user's typing.
     var isLearningEnabled: Bool {
         get { defaults.bool(forKey: Keys.learning) }
         set { defaults.set(newValue, forKey: Keys.learning) }
     }
 
-    /// Minimum characters typed before completions appear.
     var minPrefixLength: Int {
         get { max(1, defaults.integer(forKey: Keys.minPrefix)) }
         set { defaults.set(newValue, forKey: Keys.minPrefix) }
+    }
+
+    var selectedModel: JosTypeModel {
+        get {
+            let raw = defaults.string(forKey: Keys.model) ?? JosTypeModel.gemma3_1b.rawValue
+            return JosTypeModel(rawValue: raw) ?? .gemma3_1b
+        }
+        set { defaults.set(newValue.rawValue, forKey: Keys.model) }
     }
 }

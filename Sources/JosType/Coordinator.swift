@@ -2,33 +2,36 @@ import AppKit
 import ApplicationServices
 
 /// The brain of the app: wires the focus tracker, prediction engine, overlay,
-/// and key tap together. Owns the "currently shown suggestion" state.
+/// and key tap together. Uses the LLM for high-quality predictions when
+/// available, falling back to the n-gram engine while the model loads.
 final class Coordinator {
 
-    private let model = LanguageModel()
-    private let engine: PredictionEngine
+    private let ngramModel = LanguageModel()
+    private let ngramEngine: PredictionEngine
+    private let llmPredictor = LLMPredictor()
     private let focusTracker = FocusTracker()
     private let overlay = SuggestionOverlay()
     private let keyTap = KeyTap()
 
-    /// State for the suggestion that's currently on screen.
     private var active: (suggestion: Suggestion, snapshot: TextSnapshot)?
 
-    /// Buffer of recently typed text awaiting a training pass.
-    private var trainingBuffer = ""
     private var lastTrainedText = ""
     private var saveWorkItem: DispatchWorkItem?
+    /// Debounce for LLM predictions — wait until user pauses typing.
+    private var llmWorkItem: DispatchWorkItem?
 
     init() {
-        engine = PredictionEngine(model: model)
+        ngramEngine = PredictionEngine(model: ngramModel)
     }
 
-    // MARK: - Lifecycle
+    // MARK: - Public
+
+    var modelStatus: LLMPredictor.Status { llmPredictor.status }
 
     func start() {
-        model.loadSeed()
-        model.load()
-        engine.refreshDictionary()
+        ngramModel.loadSeed()
+        ngramModel.load()
+        ngramEngine.refreshDictionary()
 
         focusTracker.onChange = { [weak self] snapshot in
             self?.handleSnapshot(snapshot)
@@ -39,24 +42,38 @@ final class Coordinator {
 
         focusTracker.start()
         keyTap.start()
+
+        // Start loading the selected model in the background.
+        let selectedModel = Settings.shared.selectedModel
+        Task { @MainActor in
+            await llmPredictor.loadModel(selectedModel)
+        }
     }
 
     func stop() {
         focusTracker.stop()
         keyTap.stop()
+        llmPredictor.cancelPendingPrediction()
         clearSuggestion()
-        model.save()
+        ngramModel.save()
     }
 
-    /// Called when the user toggles Glide off/on from the menu.
     func setEnabled(_ enabled: Bool) {
         if enabled {
             focusTracker.start()
             keyTap.start()
         } else {
             clearSuggestion()
+            llmPredictor.cancelPendingPrediction()
             focusTracker.stop()
             keyTap.stop()
+        }
+    }
+
+    func switchModel(_ model: JosTypeModel) {
+        Settings.shared.selectedModel = model
+        Task { @MainActor in
+            await llmPredictor.loadModel(model)
         }
     }
 
@@ -68,48 +85,96 @@ final class Coordinator {
             return
         }
 
-        // Opportunistically learn from the field's text.
         scheduleTraining(for: snapshot.fullText)
 
         let textBeforeCaret = String(snapshot.fullText.prefix(snapshot.caretOffset))
-
-        // Respect the minimum-prefix setting for completions.
         let ctx = Tokenizer.analyze(textBeforeCaret)
         if !ctx.currentPrefix.isEmpty && ctx.currentPrefix.count < Settings.shared.minPrefixLength {
             clearSuggestion()
             return
         }
 
-        guard let suggestion = engine.suggest(
+        // Immediately show n-gram suggestion for responsiveness.
+        if let ngramSuggestion = ngramEngine.suggest(
             textBeforeCaret: textBeforeCaret,
             caretOffset: snapshot.caretOffset
-        ) else {
-            clearSuggestion()
-            return
+        ) {
+            present(ngramSuggestion, for: snapshot)
         }
 
-        present(suggestion, for: snapshot)
+        // If the LLM is ready, schedule a higher-quality prediction after a
+        // short pause (so we don't run inference on every keystroke).
+        if llmPredictor.isReady {
+            scheduleLLMPrediction(textBeforeCaret: textBeforeCaret, snapshot: snapshot)
+        }
     }
+
+    private func scheduleLLMPrediction(textBeforeCaret: String, snapshot: TextSnapshot) {
+        llmWorkItem?.cancel()
+        llmPredictor.cancelPendingPrediction()
+
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in
+                guard let result = await self.llmPredictor.predict(
+                    context: textBeforeCaret, maxTokens: 25
+                ) else { return }
+
+                // Only show if the user hasn't moved on (snapshot still matches).
+                let currentText = self.currentTextBeforeCaret()
+                guard currentText == textBeforeCaret else { return }
+
+                let suggestion = Suggestion(
+                    kind: .nextWord,
+                    insertText: result,
+                    displayText: result,
+                    replaceRange: snapshot.caretOffset..<snapshot.caretOffset
+                )
+                self.present(suggestion, for: snapshot)
+            }
+        }
+        llmWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
+    private func currentTextBeforeCaret() -> String? {
+        focusTracker.emitCurrentSnapshot()
+        guard let elem = focusTracker.currentElement,
+              let text = AccessibilityBridge.string(elem, kAXValueAttribute as String),
+              let range = AccessibilityBridge.selectedRange(elem),
+              range.length == 0 else { return nil }
+        let caret = max(0, min(range.location, (text as NSString).length))
+        let prefix = (text as NSString).substring(to: caret)
+        return prefix
+    }
+
+    // MARK: - Present / accept / dismiss
 
     private func present(_ suggestion: Suggestion, for snapshot: TextSnapshot) {
         active = (suggestion, snapshot)
 
-        // Locate the caret on screen to anchor the ghost text.
-        let caretRange = CFRange(location: utf16Caret(in: snapshot), length: 0)
+        let caretUTF16 = utf16Caret(in: snapshot)
+        let caretRange = CFRange(location: caretUTF16, length: 0)
+        let probeRange = caretUTF16 > 0
+            ? CFRange(location: caretUTF16 - 1, length: 1)
+            : caretRange
+
         if let rect = AccessibilityBridge.boundsForRange(snapshot.element, caretRange),
-           rect.width >= 0, rect.height > 0 {
+           rect.height > 0 {
             overlay.show(suggestion, caretRect: rect)
+        } else if let rect = AccessibilityBridge.boundsForRange(snapshot.element, probeRange),
+                  rect.height > 0 {
+            let adjusted = CGRect(x: rect.maxX, y: rect.origin.y,
+                                  width: 0, height: rect.height)
+            overlay.show(suggestion, caretRect: adjusted)
         } else if let rect = fallbackRect(for: snapshot.element) {
             overlay.show(suggestion, caretRect: rect)
         } else {
-            // Can't place it; keep the suggestion live for Tab but draw nothing.
             overlay.hide()
         }
     }
 
-    /// A coarse fallback anchor: the bottom-left of the focused element's frame.
     private func fallbackRect(for element: AXUIElement) -> CGRect? {
-        // Some elements expose a frame via kAXFrameAttribute (not universal).
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
             element, "AXFrame" as CFString, &value) == .success,
@@ -127,15 +192,12 @@ final class Coordinator {
         return (prefix as NSString).length
     }
 
-    // MARK: - Accept / dismiss
-
     private func acceptActive() -> Bool {
         guard let (suggestion, snapshot) = active else { return false }
         let ok = TextInserter.apply(suggestion, to: snapshot.element, fullText: snapshot.fullText)
         clearSuggestion()
-        // The accepted text is good training signal.
         if Settings.shared.isLearningEnabled {
-            model.train(on: suggestion.insertText)
+            ngramModel.train(on: suggestion.insertText)
         }
         return ok
     }
@@ -153,8 +215,6 @@ final class Coordinator {
 
     // MARK: - Training
 
-    /// Debounced training: when the field text settles, learn the delta and
-    /// periodically persist + refresh the typo dictionary.
     private func scheduleTraining(for text: String) {
         guard Settings.shared.isLearningEnabled else { return }
         guard text != lastTrainedText else { return }
@@ -163,9 +223,9 @@ final class Coordinator {
         saveWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.model.train(on: text)
-            self.engine.refreshDictionary()
-            self.model.save()
+            self.ngramModel.train(on: text)
+            self.ngramEngine.refreshDictionary()
+            self.ngramModel.save()
         }
         saveWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: work)

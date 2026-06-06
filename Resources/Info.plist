@@ -4,11 +4,11 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Glide</string>
+    <string>JosType</string>
     <key>CFBundleDisplayName</key>
-    <string>Glide</string>
+    <string>JosType</string>
     <key>CFBundleIdentifier</key>
-    <string>app.glide.Glide</string>
+    <string>app.jostype.JosType</string>
     <key>CFBundleVersion</key>
     <string>0.1.0</string>
     <key>CFBundleShortVersionString</key>
@@ -16,7 +16,7 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
-    <string>Glide</string>
+    <string>JosType</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <!-- Menu-bar agent: no Dock icon, no main window. -->
@@ -26,6 +26,6 @@
     <string>MIT License</string>
     <!-- Explains the Input Monitoring prompt (Tab/Esc event tap). -->
     <key>NSInputMonitoringUsageDescription</key>
-    <string>Glide watches for the Tab and Esc keys so you can accept or dismiss autocomplete suggestions.</string>
+    <string>JosType watches for the Tab and Esc keys so you can accept or dismiss autocomplete suggestions.</string>
 </dict>
 </plist>

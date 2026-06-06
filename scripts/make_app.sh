@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build Glide in release mode and assemble a runnable Glide.app bundle.
+# Build JosType in release mode and assemble a runnable JosType.app bundle.
 # Run from the repo root:  ./scripts/make_app.sh
 #
 set -euo pipefail
@@ -8,7 +8,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-APP_NAME="Glide"
+APP_NAME="JosType"
 BUILD_DIR="$ROOT/build"
 APP_DIR="$BUILD_DIR/$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
@@ -27,7 +27,7 @@ mkdir -p "$MACOS_DIR" "$RES_DIR"
 cp "$BIN_PATH/$APP_NAME" "$MACOS_DIR/$APP_NAME"
 cp "$ROOT/Resources/Info.plist" "$CONTENTS/Info.plist"
 
-# SwiftPM emits resources in a bundle named Glide_Glide.bundle; copy it in so
+# SwiftPM emits resources in a bundle named JosType_JosType.bundle; copy it in so
 # Bundle.module resolves at runtime inside the .app.
 if [ -d "$BIN_PATH/${APP_NAME}_${APP_NAME}.bundle" ]; then
   cp -R "$BIN_PATH/${APP_NAME}_${APP_NAME}.bundle" "$RES_DIR/"
