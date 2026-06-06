@@ -19,7 +19,7 @@ final class RecordingIndicator {
 
         textLabel = NSTextField(labelWithString: "Listening...")
         textLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
-        textLabel.textColor = .white
+        textLabel.textColor = .labelColor
         textLabel.isBezeled = false
         textLabel.isEditable = false
         textLabel.drawsBackground = false
@@ -29,7 +29,9 @@ final class RecordingIndicator {
         container = NSView()
         container.wantsLayer = true
         container.layer?.cornerRadius = 16
-        container.layer?.backgroundColor = NSColor(red: 0.2, green: 0.2, blue: 0.25, alpha: 0.92).cgColor
+        container.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.95).cgColor
+        container.layer?.borderWidth = 1
+        container.layer?.borderColor = NSColor.separatorColor.cgColor
 
         container.addSubview(micLabel)
         container.addSubview(textLabel)

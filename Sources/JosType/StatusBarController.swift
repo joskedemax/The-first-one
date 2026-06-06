@@ -147,7 +147,7 @@ final class StatusBarController {
         alert.messageText = "JosType"
         alert.informativeText = """
         Smart, private, on-device autocomplete for Mac.
-        Powered by Gemma — runs entirely on your machine.
+        Runs entirely on your machine via Apple MLX.
 
         Tab → accept next word
         ` (backtick) → accept entire suggestion

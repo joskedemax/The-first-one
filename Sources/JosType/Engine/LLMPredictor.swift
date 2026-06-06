@@ -66,9 +66,6 @@ final class LLMPredictor {
     private var currentModel: JosTypeModel?
     private var generationTask: Task<Void, Never>?
 
-    // KV-cache state: reused across calls so only new tokens need processing.
-    private var cachedPrompt: String = ""
-
     func loadModel(_ model: JosTypeModel) async {
         if currentModel == model && status == .ready { return }
         currentModel = model
@@ -144,11 +141,12 @@ final class LLMPredictor {
     func predict(context: String, screenContext: String? = nil, maxTokens: Int = 80) async -> String? {
         guard status == .ready, let container = modelContainer else { return nil }
 
-        generationTask?.cancel()
+        cancelPendingPrediction()
 
         let isBase = currentModel?.isBase ?? false
+        var result: String?
 
-        let task = Task<String?, Never> {
+        let task = Task<Void, Never> {
             let raw: String?
             if isBase {
                 let prompt = buildBasePrompt(context: context, screenContext: screenContext)
@@ -166,22 +164,17 @@ final class LLMPredictor {
                 }
             }
 
-            guard let response = raw, !Task.isCancelled else { return nil }
-            return self.postProcess(response, context: context)
+            guard let response = raw, !Task.isCancelled else { return }
+            result = self.postProcess(response, context: context)
         }
-        let oldTask = generationTask
-        generationTask = Task { await task.value; return }
-        _ = oldTask
-        return await task.value
+        generationTask = task
+        await task.value
+        return result
     }
 
     func cancelPendingPrediction() {
         generationTask?.cancel()
         generationTask = nil
-    }
-
-    func invalidateCache() {
-        cachedPrompt = ""
     }
 
     var isReady: Bool { status == .ready }

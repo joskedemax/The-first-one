@@ -8,6 +8,7 @@ enum PermissionsGuide {
     struct Status {
         let accessibility: Bool
         let inputMonitoring: Bool
+        let screenRecording: Bool
         let microphone: AVAuthorizationStatus
         let speechRecognition: SFSpeechRecognizerAuthorizationStatus
     }
@@ -16,6 +17,7 @@ enum PermissionsGuide {
         Status(
             accessibility: AccessibilityBridge.isTrusted(prompt: false),
             inputMonitoring: checkInputMonitoring(),
+            screenRecording: checkScreenRecording(),
             microphone: AVCaptureDevice.authorizationStatus(for: .audio),
             speechRecognition: SFSpeechRecognizer.authorizationStatus()
         )
@@ -23,14 +25,14 @@ enum PermissionsGuide {
 
     static var allGranted: Bool {
         let s = check()
-        return s.accessibility && s.inputMonitoring
+        return s.accessibility && s.inputMonitoring && s.screenRecording
             && s.microphone == .authorized
             && s.speechRecognition == .authorized
     }
 
     static func showSetupWizard() {
         let status = check()
-        if status.accessibility && status.inputMonitoring
+        if status.accessibility && status.inputMonitoring && status.screenRecording
             && status.microphone == .authorized
             && status.speechRecognition == .authorized {
             showAllGoodAlert()
@@ -60,7 +62,7 @@ enum PermissionsGuide {
                 and insert suggestions across all apps.
 
                 Click "Open Settings" to go to:
-                System Settings → Privacy & Security → Accessibility
+                System Settings \u{2192} Privacy & Security \u{2192} Accessibility
 
                 Find JosType in the list and toggle it ON.
                 If JosType isn't listed, click the + button to add it.
@@ -84,7 +86,7 @@ enum PermissionsGuide {
                 and Escape keys for accepting/dismissing suggestions.
 
                 Click "Open Settings" to go to:
-                System Settings → Privacy & Security → Input Monitoring
+                System Settings \u{2192} Privacy & Security \u{2192} Input Monitoring
 
                 Find JosType and toggle it ON.
                 If it's not listed, you may need to restart JosType after \
@@ -96,18 +98,40 @@ enum PermissionsGuide {
             if !proceed { return }
         }
 
-        // Step 3: Microphone (for ,,talk)
-        if status.microphone != .authorized {
+        // Step 3: Screen Recording (for context-aware suggestions)
+        if !status.screenRecording {
             let proceed = showPermissionStep(
                 step: 3,
+                title: "Screen Recording Permission (Recommended)",
+                message: """
+                JosType can read visible text from other windows to give \
+                you more relevant suggestions. This requires Screen Recording access.
+
+                Click "Open Settings" to go to:
+                System Settings \u{2192} Privacy & Security \u{2192} Screen Recording
+
+                Find JosType and toggle it ON. This is optional — JosType \
+                works without it but suggestions won't use screen context.
+                """,
+                buttonTitle: "Open Settings",
+                settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+            )
+            if !proceed { return }
+        }
+
+        // Step 4: Microphone (for voice input)
+        let voiceTrigger = Settings.shared.voiceTrigger
+        if status.microphone != .authorized {
+            let proceed = showPermissionStep(
+                step: 4,
                 title: "Microphone Permission (for Voice Input)",
                 message: """
-                JosType can transcribe your speech when you type ",,talk" \
+                JosType can transcribe your speech when you type "\(voiceTrigger)" \
                 in any text field. This requires microphone access.
 
                 Click "Grant Access" and approve the system dialog.
                 You can also grant this later in:
-                System Settings → Privacy & Security → Microphone
+                System Settings \u{2192} Privacy & Security \u{2192} Microphone
                 """,
                 buttonTitle: "Grant Access",
                 action: {
@@ -117,10 +141,10 @@ enum PermissionsGuide {
             if !proceed { return }
         }
 
-        // Step 4: Speech Recognition (for ,,talk)
+        // Step 5: Speech Recognition (for voice input)
         if status.speechRecognition != .authorized {
             let proceed = showPermissionStep(
-                step: 4,
+                step: 5,
                 title: "Speech Recognition Permission (for Voice Input)",
                 message: """
                 JosType uses Apple's speech recognition to transcribe \
@@ -128,7 +152,7 @@ enum PermissionsGuide {
 
                 Click "Grant Access" and approve the system dialog.
                 You can also grant this later in:
-                System Settings → Privacy & Security → Speech Recognition
+                System Settings \u{2192} Privacy & Security \u{2192} Speech Recognition
                 """,
                 buttonTitle: "Grant Access",
                 action: {
@@ -138,7 +162,6 @@ enum PermissionsGuide {
             if !proceed { return }
         }
 
-        // Final status
         let final_ = check()
         showFinalStatus(final_)
     }
@@ -209,36 +232,40 @@ enum PermissionsGuide {
     }
 
     private static func showAllGoodAlert() {
+        let voiceTrigger = Settings.shared.voiceTrigger
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = "All Permissions Granted"
         alert.informativeText = """
-        ✓ Accessibility — granted
-        ✓ Input Monitoring — granted
-        ✓ Microphone — granted
-        ✓ Speech Recognition — granted
+        \u{2713} Accessibility — granted
+        \u{2713} Input Monitoring — granted
+        \u{2713} Screen Recording — granted
+        \u{2713} Microphone — granted
+        \u{2713} Speech Recognition — granted
 
         JosType is fully set up and ready to use!
 
         Shortcuts:
-        • Tab — accept next word
-        • ` (backtick) — accept entire suggestion
-        • Esc — dismiss suggestion
-        • ,,talk — voice-to-text input
+        \u{2022} Tab — accept next word
+        \u{2022} ` (backtick) — accept entire suggestion
+        \u{2022} Esc — dismiss suggestion
+        \u{2022} \(voiceTrigger) — voice-to-text input
         """
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
 
     private static func showFinalStatus(_ status: Status) {
+        let voiceTrigger = Settings.shared.voiceTrigger
         let items = [
             ("Accessibility", status.accessibility),
             ("Input Monitoring", status.inputMonitoring),
+            ("Screen Recording", status.screenRecording),
             ("Microphone", status.microphone == .authorized),
             ("Speech Recognition", status.speechRecognition == .authorized),
         ]
         let lines = items.map { name, ok in
-            ok ? "✓ \(name) — granted" : "✗ \(name) — not granted"
+            ok ? "\u{2713} \(name) — granted" : "\u{2717} \(name) — not granted"
         }
         let allOK = items.allSatisfy(\.1)
 
@@ -253,10 +280,10 @@ enum PermissionsGuide {
             alert.informativeText += """
 
             Shortcuts:
-            • Tab — accept next word
-            • ` (backtick) — accept entire suggestion
-            • Esc — dismiss suggestion
-            • ,,talk — voice-to-text input
+            \u{2022} Tab — accept next word
+            \u{2022} ` (backtick) — accept entire suggestion
+            \u{2022} Esc — dismiss suggestion
+            \u{2022} \(voiceTrigger) — voice-to-text input
             """
         }
         alert.addButton(withTitle: "OK")
@@ -271,7 +298,7 @@ enum PermissionsGuide {
         }
     }
 
-    // MARK: - Input Monitoring check
+    // MARK: - Permission checks
 
     private static func checkInputMonitoring() -> Bool {
         let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
@@ -283,7 +310,22 @@ enum PermissionsGuide {
             callback: { _, _, event, _ in Unmanaged.passUnretained(event) },
             userInfo: nil
         )
-        let granted = tap != nil
-        return granted
+        return tap != nil
+    }
+
+    private static func checkScreenRecording() -> Bool {
+        guard let windowList = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]] else { return false }
+
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        for info in windowList {
+            guard let pid = info[kCGWindowOwnerPID as String] as? pid_t,
+                  pid != ownPID else { continue }
+            if info[kCGWindowName as String] as? String != nil {
+                return true
+            }
+        }
+        return false
     }
 }

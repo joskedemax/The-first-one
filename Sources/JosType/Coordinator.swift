@@ -68,9 +68,12 @@ final class Coordinator {
         focusTracker.stop()
         keyTap.stop()
         llmPredictor.cancelPendingPrediction()
-        llmPredictor.invalidateCache()
         speechTranscriber.cancelListening()
         clearSuggestion()
+        llmWorkItem?.cancel()
+        llmWorkItem = nil
+        saveWorkItem?.cancel()
+        saveWorkItem = nil
         lastProcessedSnapshot = nil
         ngramModel.save()
     }
@@ -82,6 +85,10 @@ final class Coordinator {
         } else {
             clearSuggestion()
             llmPredictor.cancelPendingPrediction()
+            llmWorkItem?.cancel()
+            llmWorkItem = nil
+            saveWorkItem?.cancel()
+            saveWorkItem = nil
             focusTracker.stop()
             keyTap.stop()
         }

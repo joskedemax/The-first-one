@@ -16,12 +16,9 @@ enum TextInserter {
             return AccessibilityBridge.replaceSelectedText(element, with: suggestion.insertText)
         }
 
-        // Convert the Character range into a UTF-16 (NSString) range for AX.
-        let ns = fullText as NSString
         let utf16Start = utf16Index(in: fullText, characterOffset: suggestion.replaceRange.lowerBound)
         let utf16End = utf16Index(in: fullText, characterOffset: suggestion.replaceRange.upperBound)
         let cfRange = CFRange(location: utf16Start, length: utf16End - utf16Start)
-        _ = ns // (kept for clarity/symmetry)
 
         guard AccessibilityBridge.setSelectedRange(element, cfRange) else { return false }
         return AccessibilityBridge.replaceSelectedText(element, with: suggestion.insertText)
