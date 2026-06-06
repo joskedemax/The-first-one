@@ -99,6 +99,22 @@ final class SuggestionOverlay {
         }
     }
 
+    /// Update the displayed text without repositioning the window.
+    /// Use this for streaming tokens so the overlay doesn't flicker.
+    func updateText(_ text: String) {
+        guard window.isVisible else { return }
+        label.stringValue = text
+        label.sizeToFit()
+
+        var labelW = label.frame.width
+        let labelH = label.frame.height
+
+        // Re-clamp width to window bounds (field clamp applied at show time).
+        let maxW = window.frame.width
+        labelW = min(labelW, maxW)
+        label.frame.size = NSSize(width: labelW, height: labelH)
+    }
+
     func hide() {
         window.orderOut(nil)
         label.stringValue = ""

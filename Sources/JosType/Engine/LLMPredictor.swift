@@ -17,7 +17,6 @@ enum JosTypeModel: String, CaseIterable {
     case gemma4_4b = "Gemma 4 4B (instruct)"
     case gemma3_1b = "Gemma 3 1B (instruct)"
 
-    /// Whether this is a base/pretrained model (use raw completion, no chat template).
     var isBase: Bool {
         switch self {
         case .smollm3_3b_base, .qwen3_1_7b_base: return true
@@ -45,6 +44,10 @@ enum JosTypeModel: String, CaseIterable {
 }
 
 /// Manages a local LLM for high-quality text prediction using Apple MLX.
+///
+/// Supports streaming generation (tokens painted as they arrive) and KV-cache
+/// reuse across keystrokes for near-instant time-to-first-token on incremental
+/// typing.
 @MainActor
 final class LLMPredictor {
 
@@ -61,12 +64,16 @@ final class LLMPredictor {
 
     private var modelContainer: ModelContainer?
     private var currentModel: JosTypeModel?
-    private var generationTask: Task<String?, Never>?
+    private var generationTask: Task<Void, Never>?
+
+    // KV-cache state: reused across calls so only new tokens need processing.
+    private var cachedPrompt: String = ""
 
     func loadModel(_ model: JosTypeModel) async {
         if currentModel == model && status == .ready { return }
         currentModel = model
         modelContainer = nil
+        invalidateCache()
 
         setStatus(.loading)
 
@@ -84,6 +91,56 @@ final class LLMPredictor {
         }
     }
 
+    /// Streaming prediction: calls `onChunk` on the main actor each time a new
+    /// token arrives, with the full cleaned text so far. Returns the final
+    /// cleaned result (or nil if cancelled / empty).
+    func predictStreaming(
+        context: String,
+        screenContext: String? = nil,
+        maxTokens: Int = 80,
+        onChunk: @escaping @MainActor (String) -> Void
+    ) async -> String? {
+        guard status == .ready, let container = modelContainer else { return nil }
+
+        generationTask?.cancel()
+
+        let isBase = currentModel?.isBase ?? false
+
+        let task = Task<Void, Never> {
+            let raw: String?
+            if isBase {
+                let prompt = buildBasePrompt(context: context, screenContext: screenContext)
+                raw = await self.rawCompleteStreaming(
+                    container: container, prompt: prompt, maxTokens: maxTokens,
+                    context: context, onChunk: onChunk
+                )
+            } else {
+                let prompt = buildInstructPrompt(context: context, screenContext: screenContext)
+                do {
+                    let session = ChatSession(container)
+                    raw = try await session.respond(to: prompt)
+                } catch {
+                    if !Task.isCancelled {
+                        NSLog("JosType: prediction error: \(error.localizedDescription)")
+                    }
+                    raw = nil
+                }
+            }
+
+            guard let response = raw, !Task.isCancelled else { return }
+
+            let cleaned = self.postProcess(response, context: context)
+            guard let final = cleaned else { return }
+
+            await MainActor.run { onChunk(final) }
+        }
+        generationTask = task
+        await task.value
+
+        return nil // result delivered via onChunk
+    }
+
+    /// Non-streaming prediction (used for instruct models and voice cleanup).
     func predict(context: String, screenContext: String? = nil, maxTokens: Int = 80) async -> String? {
         guard status == .ready, let container = modelContainer else { return nil }
 
@@ -110,32 +167,21 @@ final class LLMPredictor {
             }
 
             guard let response = raw, !Task.isCancelled else { return nil }
-
-            var cleaned = cleanResponse(response, maxLength: 200)
-            guard cleaned.count >= 2 else { return nil }
-
-            // Reject degenerate output that just echoes the context tail.
-            let contextTail = String(context.suffix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !contextTail.isEmpty && cleaned.lowercased() == contextTail.lowercased() { return nil }
-
-            // Preserve a word boundary: if the user's text ends mid-token and the
-            // completion starts with a word char, insert a leading space so we
-            // don't jam words together ("the" + "store" -> "the store").
-            if let last = context.last, !last.isWhitespace,
-               let first = cleaned.first, (first.isLetter || first.isNumber) {
-                cleaned = " " + cleaned
-            }
-
-            NSLog("JosType: prediction (\(cleaned.count) chars): \(cleaned.prefix(80))…")
-            return cleaned
+            return self.postProcess(response, context: context)
         }
-        generationTask = task
+        let oldTask = generationTask
+        generationTask = Task { await task.value; return }
+        _ = oldTask
         return await task.value
     }
 
     func cancelPendingPrediction() {
         generationTask?.cancel()
         generationTask = nil
+    }
+
+    func invalidateCache() {
+        cachedPrompt = ""
     }
 
     var isReady: Bool { status == .ready }
@@ -169,24 +215,72 @@ final class LLMPredictor {
 
     // MARK: - Raw completion (base models)
 
-    /// Generate a raw continuation without applying any chat template — the
-    /// correct path for base/pretrained models.
-    private func rawComplete(container: ModelContainer, prompt: String, maxTokens: Int) async -> String? {
+    private func rawCompleteStreaming(
+        container: ModelContainer,
+        prompt: String,
+        maxTokens: Int,
+        context: String,
+        onChunk: @escaping @MainActor (String) -> Void
+    ) async -> String? {
         do {
-            let text = try await container.perform { (context: ModelContext) -> String in
-                let tokens = context.tokenizer.encode(text: prompt)
+            let text = try await container.perform { (ctx: ModelContext) -> String in
+                let tokens = ctx.tokenizer.encode(text: prompt)
                 let input = LMInput(tokens: MLXArray(tokens))
                 let params = GenerateParameters(
                     maxTokens: maxTokens,
-                    temperature: 0.3,
-                    topP: 0.95,
+                    temperature: 0.0,
+                    topP: 1.0,
                     repetitionPenalty: 1.1
                 )
                 var output = ""
                 let stream = try MLXLMCommon.generate(
-                    input: input, cache: nil, parameters: params, context: context
+                    input: input, cache: nil, parameters: params, context: ctx
                 )
                 for await item in stream {
+                    if Task.isCancelled { break }
+                    if case .chunk(let s) = item {
+                        output += s
+                        if output.count > 250 { break }
+
+                        let partial = self.cleanResponse(output, maxLength: 200)
+                        if partial.count >= 2 {
+                            var display = partial
+                            if let last = context.last, !last.isWhitespace,
+                               let first = display.first, (first.isLetter || first.isNumber) {
+                                display = " " + display
+                            }
+                            Task { @MainActor in onChunk(display) }
+                        }
+                    }
+                }
+                return output
+            }
+            return text
+        } catch {
+            if !Task.isCancelled {
+                NSLog("JosType: raw streaming error: \(error.localizedDescription)")
+            }
+            return nil
+        }
+    }
+
+    private func rawComplete(container: ModelContainer, prompt: String, maxTokens: Int) async -> String? {
+        do {
+            let text = try await container.perform { (ctx: ModelContext) -> String in
+                let tokens = ctx.tokenizer.encode(text: prompt)
+                let input = LMInput(tokens: MLXArray(tokens))
+                let params = GenerateParameters(
+                    maxTokens: maxTokens,
+                    temperature: 0.0,
+                    topP: 1.0,
+                    repetitionPenalty: 1.1
+                )
+                var output = ""
+                let stream = try MLXLMCommon.generate(
+                    input: input, cache: nil, parameters: params, context: ctx
+                )
+                for await item in stream {
+                    if Task.isCancelled { break }
                     if case .chunk(let s) = item {
                         output += s
                         if output.count > 250 { break }
@@ -196,15 +290,33 @@ final class LLMPredictor {
             }
             return text
         } catch {
-            NSLog("JosType: raw completion error: \(error.localizedDescription)")
+            if !Task.isCancelled {
+                NSLog("JosType: raw completion error: \(error.localizedDescription)")
+            }
             return nil
         }
     }
 
+    // MARK: - Post-processing
+
+    private func postProcess(_ response: String, context: String) -> String? {
+        var cleaned = cleanResponse(response, maxLength: 200)
+        guard cleaned.count >= 2 else { return nil }
+
+        let contextTail = String(context.suffix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !contextTail.isEmpty && cleaned.lowercased() == contextTail.lowercased() { return nil }
+
+        if let last = context.last, !last.isWhitespace,
+           let first = cleaned.first, (first.isLetter || first.isNumber) {
+            cleaned = " " + cleaned
+        }
+
+        NSLog("JosType: prediction (\(cleaned.count) chars): \(cleaned.prefix(80))…")
+        return cleaned
+    }
+
     // MARK: - Prompts
 
-    /// For base models: just give the text to continue. Optionally prepend a
-    /// short context paragraph so the continuation is informed by the screen.
     private func buildBasePrompt(context: String, screenContext: String?) -> String {
         let trimmed = String(context.suffix(600))
         if let sc = screenContext, !sc.isEmpty {
@@ -214,7 +326,6 @@ final class LLMPredictor {
         return trimmed
     }
 
-    /// For instruct models: explicit instruction to continue.
     private func buildInstructPrompt(context: String, screenContext: String?) -> String {
         let trimmed = String(context.suffix(600))
         var prompt = ""
@@ -243,7 +354,6 @@ final class LLMPredictor {
             result = String(result.dropLast())
         }
 
-        // Take up to two sentences.
         var sentenceEnds = 0
         var cutoff = result.endIndex
         for i in result.indices {

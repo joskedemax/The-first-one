@@ -67,6 +67,7 @@ final class Coordinator {
         focusTracker.stop()
         keyTap.stop()
         llmPredictor.cancelPendingPrediction()
+        llmPredictor.invalidateCache()
         speechTranscriber.cancelListening()
         clearSuggestion()
         lastProcessedSnapshot = nil
@@ -156,25 +157,35 @@ final class Coordinator {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             Task { @MainActor in
-                guard let result = await self.llmPredictor.predict(
-                    context: textBeforeCaret, screenContext: visibleContext, maxTokens: 80
-                ) else { return }
+                _ = await self.llmPredictor.predictStreaming(
+                    context: textBeforeCaret,
+                    screenContext: visibleContext,
+                    maxTokens: 80
+                ) { [weak self] partialText in
+                    guard let self else { return }
 
-                // Only show if the user hasn't moved on (snapshot still matches).
-                let currentText = self.currentTextBeforeCaret()
-                guard currentText == textBeforeCaret else { return }
+                    // Only update if the user hasn't moved on.
+                    let currentText = self.currentTextBeforeCaret()
+                    guard currentText == textBeforeCaret else { return }
 
-                let suggestion = Suggestion(
-                    kind: .nextWord,
-                    insertText: result,
-                    displayText: result,
-                    replaceRange: snapshot.caretOffset..<snapshot.caretOffset
-                )
-                self.present(suggestion, for: snapshot)
+                    let suggestion = Suggestion(
+                        kind: .nextWord,
+                        insertText: partialText,
+                        displayText: partialText,
+                        replaceRange: snapshot.caretOffset..<snapshot.caretOffset
+                    )
+
+                    if self.overlay.isVisible, self.active != nil {
+                        self.active = (suggestion, snapshot)
+                        self.overlay.updateText(partialText)
+                    } else {
+                        self.present(suggestion, for: snapshot)
+                    }
+                }
             }
         }
         llmWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
     }
 
     private func currentTextBeforeCaret() -> String? {
