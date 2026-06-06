@@ -9,6 +9,7 @@ final class Settings {
         static let learning = "jostype.learning"
         static let minPrefix = "jostype.minPrefixLength"
         static let model = "jostype.selectedModel"
+        static let completedSetup = "jostype.completedSetup"
     }
 
     private init() {
@@ -33,6 +34,11 @@ final class Settings {
     var minPrefixLength: Int {
         get { max(1, defaults.integer(forKey: Keys.minPrefix)) }
         set { defaults.set(newValue, forKey: Keys.minPrefix) }
+    }
+
+    var hasCompletedSetup: Bool {
+        get { defaults.bool(forKey: Keys.completedSetup) }
+        set { defaults.set(newValue, forKey: Keys.completedSetup) }
     }
 
     var selectedModel: JosTypeModel {

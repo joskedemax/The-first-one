@@ -130,14 +130,7 @@ final class StatusBarController {
     }
 
     @objc private func checkPermissions() {
-        let trusted = AccessibilityBridge.isTrusted(prompt: true)
-        let alert = NSAlert()
-        alert.messageText = trusted ? "Accessibility: granted" : "Accessibility: not granted"
-        alert.informativeText = trusted
-            ? "JosType can read text fields. If Tab doesn't work, also enable Input Monitoring in System Settings → Privacy & Security."
-            : "Enable JosType under System Settings → Privacy & Security → Accessibility, and also under Input Monitoring."
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+        PermissionsGuide.showSetupWizard()
     }
 
     @objc private func about() {
@@ -147,8 +140,11 @@ final class StatusBarController {
         Smart, private, on-device autocomplete for Mac.
         Powered by Gemma — runs entirely on your machine.
 
-        Tab / Right Arrow → accept suggestion
+        Tab → accept next word
+        ` (backtick) → accept entire suggestion
+        Right Arrow → accept entire suggestion
         Esc → dismiss
+        ,,talk → voice-to-text input
         """
         alert.addButton(withTitle: "OK")
         alert.runModal()

@@ -12,9 +12,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusBar = StatusBarController(coordinator: coordinator)
 
-        // Prompt for Accessibility up front so the user knows what's needed.
-        if !AccessibilityBridge.isTrusted(prompt: true) {
-            NSLog("JosType: waiting for Accessibility permission.")
+        // On first launch (or if permissions are missing), guide the user.
+        if !Settings.shared.hasCompletedSetup || !PermissionsGuide.allGranted {
+            DispatchQueue.main.async {
+                PermissionsGuide.showSetupWizard()
+                Settings.shared.hasCompletedSetup = true
+            }
         }
 
         coordinator.start()
