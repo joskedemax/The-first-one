@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Glide</string>
+    <key>CFBundleDisplayName</key>
+    <string>Glide</string>
+    <key>CFBundleIdentifier</key>
+    <string>app.glide.Glide</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>Glide</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <!-- Menu-bar agent: no Dock icon, no main window. -->
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>MIT License</string>
+    <!-- Explains the Input Monitoring prompt (Tab/Esc event tap). -->
+    <key>NSInputMonitoringUsageDescription</key>
+    <string>Glide watches for the Tab and Esc keys so you can accept or dismiss autocomplete suggestions.</string>
+</dict>
+</plist>
