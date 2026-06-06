@@ -193,12 +193,16 @@ final class LLMPredictor {
             prompt += "Context from the user's screen:\n\(String(sc.prefix(1500)))\n\n"
         }
         prompt += """
-        Clean up this voice transcription for insertion into a text field. \
-        Fix grammar and punctuation, remove filler words (um, uh, like), and use \
-        correct capitalization. Resolve self-corrections (e.g. "5pm, actually 6pm" \
-        becomes "6pm"). Never reword or add content that wasn't spoken — only fix \
-        errors. Use technical terms or names from the screen context if they match. \
-        Output ONLY the cleaned text, nothing else:
+        Fix this voice transcription. Rules: \
+        (1) Fix grammar, spelling, punctuation, capitalization. \
+        (2) Remove filler words (um, uh, like, you know). \
+        (3) Resolve self-corrections — keep only the final version \
+        (e.g. "5pm, actually 6pm" → "6pm"). \
+        (4) NEVER reword, rephrase, or add content. Keep the speaker's \
+        exact words and meaning — only fix errors. \
+        (5) Use proper nouns/technical terms from the screen context when \
+        they match what was spoken. \
+        Output ONLY the cleaned text:
 
         \(raw)
         """

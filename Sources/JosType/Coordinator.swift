@@ -23,6 +23,7 @@ final class Coordinator {
     private let screenContext = ScreenContextProvider()
     private let speechTranscriber = SpeechTranscriber()
     private let invocationFilter = InvocationFilter()
+    private let recordingIndicator = RecordingIndicator()
     private var isVoiceActive = false
 
     init() {
@@ -337,33 +338,41 @@ final class Coordinator {
         AccessibilityBridge.setSelectedRange(element, cfRange)
         AccessibilityBridge.replaceSelectedText(element, with: "")
 
-        // Show listening indicator.
-        let indicator = Suggestion(
-            kind: .nextWord, insertText: "", displayText: "Listening...",
-            replaceRange: triggerRange.lowerBound..<triggerRange.lowerBound
-        )
-        if let fieldFrame = AccessibilityBridge.frame(element),
-           let rect = AccessibilityBridge.boundsForRange(element, CFRange(location: utf16Start, length: 0)) {
-            overlay.show(indicator, caretRect: rect, fieldFrame: fieldFrame)
+        // Show floating recording pill near caret.
+        if let rect = AccessibilityBridge.boundsForRange(element, CFRange(location: utf16Start, length: 0)) {
+            recordingIndicator.show(near: rect)
+        }
+
+        // Bias recognition with words from the screen context.
+        let ctx = screenContext.context()
+        if let ctx, !ctx.isEmpty {
+            let words = extractContextualWords(from: ctx)
+            speechTranscriber.contextualStrings = words
+        } else {
+            speechTranscriber.contextualStrings = []
+        }
+
+        speechTranscriber.onPartialResult = { [weak self] partial in
+            self?.recordingIndicator.updatePartialText(partial)
         }
 
         speechTranscriber.onTranscription = { [weak self] text in
             guard let self else { return }
             guard !text.isEmpty else {
                 self.isVoiceActive = false
-                self.overlay.hide()
+                self.recordingIndicator.hide()
                 self.lastProcessedSnapshot = nil
                 return
             }
-            // Use LLM to clean up the transcription with screen context.
+            self.recordingIndicator.showProcessing()
+
             if self.llmPredictor.isReady {
-                let ctx = self.screenContext.context()
                 Task { @MainActor in
                     let cleaned = await self.llmPredictor.cleanTranscription(
                         raw: text, screenContext: ctx
                     )
                     self.isVoiceActive = false
-                    self.overlay.hide()
+                    self.recordingIndicator.hide()
                     if let focused = AccessibilityBridge.focusedElement() {
                         AccessibilityBridge.replaceSelectedText(focused, with: cleaned ?? text)
                     }
@@ -371,7 +380,7 @@ final class Coordinator {
                 }
             } else {
                 self.isVoiceActive = false
-                self.overlay.hide()
+                self.recordingIndicator.hide()
                 if let focused = AccessibilityBridge.focusedElement() {
                     AccessibilityBridge.replaceSelectedText(focused, with: text)
                 }
@@ -385,9 +394,23 @@ final class Coordinator {
         guard isVoiceActive else { return false }
         speechTranscriber.cancelListening()
         isVoiceActive = false
-        overlay.hide()
+        recordingIndicator.hide()
         lastProcessedSnapshot = nil
         return true
+    }
+
+    private func extractContextualWords(from context: String) -> [String] {
+        let words = context.components(separatedBy: .whitespacesAndNewlines)
+        var unique = Set<String>()
+        var result: [String] = []
+        for word in words {
+            let cleaned = word.trimmingCharacters(in: .punctuationCharacters)
+            if cleaned.count >= 4 && cleaned.first?.isUppercase == true && unique.insert(cleaned).inserted {
+                result.append(cleaned)
+                if result.count >= 50 { break }
+            }
+        }
+        return result
     }
 
     private func utf16Index(in string: String, characterOffset: Int) -> Int {

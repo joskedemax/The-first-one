@@ -9,6 +9,10 @@ final class SpeechTranscriber {
 
     private(set) var state: State = .idle
     var onTranscription: ((String) -> Void)?
+    var onPartialResult: ((String) -> Void)?
+
+    /// Words/phrases from the screen context that bias recognition accuracy.
+    var contextualStrings: [String] = []
 
     private let audioEngine = AVAudioEngine()
     private var recognitionTask: SFSpeechRecognitionTask?
@@ -53,6 +57,12 @@ final class SpeechTranscriber {
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
+        request.addsPunctuation = true
+
+        if !contextualStrings.isEmpty {
+            request.contextualStrings = contextualStrings
+        }
+
         self.recognitionRequest = request
 
         let inputNode = audioEngine.inputNode
@@ -76,6 +86,7 @@ final class SpeechTranscriber {
                 guard let self else { return }
                 if let result {
                     self.lastTranscript = result.bestTranscription.formattedString
+                    self.onPartialResult?(self.lastTranscript)
                     self.resetSilenceTimer()
                 }
                 if error != nil || (result?.isFinal == true) {
