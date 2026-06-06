@@ -10,6 +10,7 @@ final class Settings {
         static let minPrefix = "jostype.minPrefixLength"
         static let model = "jostype.selectedModel"
         static let completedSetup = "jostype.completedSetup"
+        static let voiceTrigger = "jostype.voiceTrigger"
     }
 
     private init() {
@@ -17,7 +18,8 @@ final class Settings {
             Keys.enabled: true,
             Keys.learning: true,
             Keys.minPrefix: 2,
-            Keys.model: JosTypeModel.smollm3_3b_base.rawValue
+            Keys.model: JosTypeModel.smollm3_3b_base.rawValue,
+            Keys.voiceTrigger: ",,talk"
         ])
     }
 
@@ -47,5 +49,10 @@ final class Settings {
             return JosTypeModel(rawValue: raw) ?? .smollm3_3b_base
         }
         set { defaults.set(newValue.rawValue, forKey: Keys.model) }
+    }
+
+    var voiceTrigger: String {
+        get { defaults.string(forKey: Keys.voiceTrigger) ?? ",,talk" }
+        set { defaults.set(newValue, forKey: Keys.voiceTrigger) }
     }
 }

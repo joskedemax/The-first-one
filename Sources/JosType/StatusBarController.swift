@@ -71,6 +71,15 @@ final class StatusBarController {
 
         menu.addItem(.separator())
 
+        let voiceItem = NSMenuItem(
+            title: "Voice Trigger: \(Settings.shared.voiceTrigger)",
+            action: #selector(changeVoiceTrigger),
+            keyEquivalent: "")
+        voiceItem.target = self
+        menu.addItem(voiceItem)
+
+        menu.addItem(.separator())
+
         let permItem = NSMenuItem(
             title: "Check Permissions…",
             action: #selector(checkPermissions),
@@ -144,10 +153,31 @@ final class StatusBarController {
         ` (backtick) → accept entire suggestion
         Right Arrow → accept entire suggestion
         Esc → dismiss
-        ,,talk → voice-to-text input
+        \(Settings.shared.voiceTrigger) → voice-to-text input
         """
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    @objc private func changeVoiceTrigger() {
+        let alert = NSAlert()
+        alert.messageText = "Voice Trigger Phrase"
+        alert.informativeText = "Type this phrase in any text field to activate voice-to-text."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
+        input.stringValue = Settings.shared.voiceTrigger
+        alert.accessoryView = input
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            let newTrigger = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !newTrigger.isEmpty {
+                Settings.shared.voiceTrigger = newTrigger
+                buildMenu()
+            }
+        }
     }
 
     @objc private func quit() {
