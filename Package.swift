@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "JosType",
     platforms: [
-        .macOS(.v13)
+        .macOS(.v14)
     ],
     dependencies: [
         .package(url: "https://github.com/tattn/LocalLLMClient.git", branch: "main")

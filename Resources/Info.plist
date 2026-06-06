@@ -18,7 +18,7 @@
     <key>CFBundleExecutable</key>
     <string>JosType</string>
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>14.0</string>
     <!-- Menu-bar agent: no Dock icon, no main window. -->
     <key>LSUIElement</key>
     <true/>

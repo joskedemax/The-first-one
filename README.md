@@ -6,7 +6,7 @@ the rest of your sentence, completes the word you're typing, and fixes typos
 inline — in (almost) any Mac app. Everything runs on your Mac. No account,
 no cloud, no API key.
 
-> Status: early but functional. Builds on macOS 13+ with Apple Silicon or Intel.
+> Status: early but functional. Builds on macOS 14+ with Apple Silicon or Intel.
 
 ## Features
 
@@ -66,7 +66,7 @@ Switch models from the menu bar ✦ → **Model** submenu.
 
 ## Requirements & permissions
 
-- **macOS 13+** (Ventura or later)
+- **macOS 14+** (Ventura or later)
 - **Xcode command-line tools** (Swift 5.9+) to build
 - ~1–3 GB disk for the model (downloaded on first launch)
 
