@@ -11,14 +11,21 @@ enum TargetInserter {
     static func insert(_ text: String, pid: pid_t?, capturedElement: AXUIElement?) {
         guard !text.isEmpty else { return }
 
+        // Try Accessibility synchronously first — AXUIElement isn't Sendable, so
+        // it must not cross a Task boundary. AX writes don't require the target
+        // app to be frontmost.
+        let inserted = insertViaAX(text, pid: pid, captured: capturedElement)
+
+        // Bring the target forward so the user sees the result land.
         if let pid, let app = NSRunningApplication(processIdentifier: pid) {
             app.activate(options: [])
         }
 
-        // Let activation/focus settle, then try AX first, paste second.
+        if inserted { return }
+
+        // Fallback: paste once the app is frontmost (captures only `text`).
         Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(140))
-            if insertViaAX(text, pid: pid, captured: capturedElement) { return }
+            try? await Task.sleep(for: .milliseconds(160))
             paste(text)
         }
     }
@@ -58,11 +65,13 @@ enum TargetInserter {
         up?.post(tap: .cgAnnotatedSessionEventTap)
 
         // Restore the user's previous clipboard once the paste has landed.
+        // Re-fetch the pasteboard inside the task (NSPasteboard isn't Sendable).
         if let saved {
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(450))
-                pasteboard.clearContents()
-                pasteboard.setString(saved, forType: .string)
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(saved, forType: .string)
             }
         }
     }

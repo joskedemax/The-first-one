@@ -6,11 +6,14 @@ import AppKit
 /// CGEventTap — we never need to *consume* the keystroke, just observe it, and
 /// global keyboard monitoring is already covered by the Accessibility trust the
 /// app requires.
-@MainActor
+///
+/// Deliberately **not** `@MainActor`: the NSEvent monitor handlers are not
+/// main-actor-isolated, so (matching `KeyTap`'s pattern) this stays a plain
+/// class and hops to the main actor only to fire the callback.
 final class HotkeyMonitor {
 
-    /// Fired when the user double-taps Option within `doubleTapWindow`.
-    var onDoubleTapOption: (() -> Void)?
+    /// Fired (on the main actor) when the user double-taps Option.
+    var onDoubleTapOption: (@MainActor () -> Void)?
 
     private var globalMonitor: Any?
     private var localMonitor: Any?
@@ -52,7 +55,8 @@ final class HotkeyMonitor {
             let now = ProcessInfo.processInfo.systemUptime
             if now - lastOptionPress < doubleTapWindow && now - lastFire > refractory {
                 lastFire = now
-                onDoubleTapOption?()
+                let callback = onDoubleTapOption
+                Task { @MainActor in callback?() }
             }
             lastOptionPress = now
         }
