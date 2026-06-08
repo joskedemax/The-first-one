@@ -19,8 +19,8 @@ final class GhostTextView: NSTextView {
     private(set) var ghostText: String = ""
     private var isMutatingGhost = false
 
-    private static let gradientHighAlpha: CGFloat = 0.85
-    private static let gradientLowAlpha: CGFloat = 0.32
+    private static let gradientHighAlpha: CGFloat = 0.55
+    private static let gradientLowAlpha: CGFloat = 0.20
 
     /// The text the user has actually committed (everything except the ghost).
     var committedString: String {
@@ -106,8 +106,10 @@ final class GhostTextView: NSTextView {
     // MARK: - Gradient
 
     private func gradientGhost(_ text: String) -> NSAttributedString {
-        let f = font ?? NSFont.systemFont(ofSize: 15)
-        let result = NSMutableAttributedString(string: text, attributes: [.font: f])
+        let baseFont = font ?? NSFont.systemFont(ofSize: 15)
+        let italicFont = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
+        let ghostColor = NSColor.systemTeal
+        let result = NSMutableAttributedString(string: text, attributes: [.font: italicFont])
         let chars = Array(text)
         let denom = CGFloat(max(chars.count - 1, 1))
         var loc = 0
@@ -117,7 +119,7 @@ final class GhostTextView: NSTextView {
             let len = String(ch).utf16.count
             result.addAttribute(
                 .foregroundColor,
-                value: NSColor.secondaryLabelColor.withAlphaComponent(alpha),
+                value: ghostColor.withAlphaComponent(alpha),
                 range: NSRange(location: loc, length: len)
             )
             loc += len

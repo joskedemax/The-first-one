@@ -122,6 +122,34 @@ enum AccessibilityBridge {
         )
     }
 
+    /// Walk the AX tree of an app to find an editable text area or text field.
+    /// Useful for Electron apps where no focused element is reported until the
+    /// user clicks into the web view's input.
+    static func findEditableTextField(in appElement: AXUIElement, maxDepth: Int = 6) -> AXUIElement? {
+        var queue: [(AXUIElement, Int)] = [(appElement, 0)]
+        while !queue.isEmpty {
+            let (el, depth) = queue.removeFirst()
+            if depth > maxDepth { continue }
+
+            if let role = string(el, kAXRoleAttribute as String),
+               (role == kAXTextAreaRole as String || role == kAXTextFieldRole as String) {
+                var settable: DarwinBoolean = false
+                if AXUIElementIsAttributeSettable(el, kAXValueAttribute as CFString, &settable) == .success,
+                   settable.boolValue {
+                    return el
+                }
+            }
+
+            var childrenRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+                  let children = childrenRef as? [AXUIElement] else { continue }
+            for child in children {
+                queue.append((child, depth + 1))
+            }
+        }
+        return nil
+    }
+
     /// PID of the app owning an element (for scoping observers).
     static func pid(of element: AXUIElement) -> pid_t? {
         var pid: pid_t = 0

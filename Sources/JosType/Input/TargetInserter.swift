@@ -63,8 +63,7 @@ enum TargetInserter {
     }
 
     private static func insertViaAX(_ text: String, pid: pid_t?, captured: AXUIElement?) -> Bool {
-        // The element that was focused when the composer opened, if it's still
-        // in the chosen app.
+        // 1. The element that was focused when the composer opened.
         if let captured,
            let cpid = AccessibilityBridge.pid(of: captured),
            pid == nil || cpid == pid,
@@ -74,10 +73,21 @@ enum TargetInserter {
 
         guard let pid else { return false }
         let appElement = AXUIElementCreateApplication(pid)
+
+        // 2. The currently focused element in the target app.
         if let focused = AccessibilityBridge.element(appElement, kAXFocusedUIElementAttribute as String),
            AccessibilityBridge.replaceSelectedText(focused, with: text) {
             return true
         }
+
+        // 3. Walk the AX tree to find an editable text field (Electron apps
+        //    often don't report a focused element until the user clicks in).
+        if let textField = AccessibilityBridge.findEditableTextField(in: appElement) {
+            if AccessibilityBridge.replaceSelectedText(textField, with: text) {
+                return true
+            }
+        }
+
         return false
     }
 
