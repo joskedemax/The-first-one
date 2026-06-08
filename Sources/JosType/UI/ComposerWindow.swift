@@ -25,23 +25,25 @@ final class ComposerWindow: NSObject {
     private let hintLabel: NSTextField
     private var chipButtons: [NSButton] = []
 
-    private let width: CGFloat = 660
-    private let pad: CGFloat = 16
-    private let chipRowH: CGFloat = 30
+    private let width: CGFloat = 720
+    private let pad: CGFloat = 20
+    private let chipRowH: CGFloat = 32
     private let hintH: CGFloat = 16
     private let gap: CGFloat = 10
-    private let minTextH: CGFloat = 56
-    private let maxTextH: CGFloat = 280
+    private let minTextH: CGFloat = 80
+    private let maxTextH: CGFloat = 400
 
     override init() {
         effect = NSVisualEffectView()
-        effect.material = .hudWindow
+        effect.material = .popover
         effect.blendingMode = .behindWindow
         effect.state = .active
+        effect.alphaValue = 0.92
         effect.wantsLayer = true
         effect.layer?.cornerRadius = 18
-        effect.layer?.borderWidth = 1
-        effect.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.6).cgColor
+        effect.layer?.cornerCurve = .continuous
+        effect.layer?.borderWidth = 0.5
+        effect.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.4).cgColor
         effect.layer?.masksToBounds = true
 
         let font = NSFont.systemFont(ofSize: 17)
@@ -69,14 +71,20 @@ final class ComposerWindow: NSObject {
         scrollView.documentView = textView
 
         chipsContainer = NSView()
+        chipsContainer.wantsLayer = true
+        chipsContainer.layer?.masksToBounds = true
 
         hintLabel = NSTextField(labelWithString: "Tab accept · ⏎ insert · ⌘1–9 pick app · esc cancel")
         hintLabel.font = NSFont.systemFont(ofSize: 11)
         hintLabel.textColor = .tertiaryLabelColor
         hintLabel.alignment = .right
 
+        let wrapper = NSView()
+        wrapper.wantsLayer = true
+        wrapper.layer?.backgroundColor = NSColor.clear.cgColor
+
         panel = ComposerPanel(
-            contentRect: NSRect(x: 0, y: 0, width: width, height: 180),
+            contentRect: NSRect(x: 0, y: 0, width: width, height: 220),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: true
@@ -87,7 +95,8 @@ final class ComposerWindow: NSObject {
         panel.level = .floating
         panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
-        panel.contentView = effect
+        panel.contentView = wrapper
+        wrapper.addSubview(effect)
 
         super.init()
 
@@ -110,11 +119,14 @@ final class ComposerWindow: NSObject {
             button.font = NSFont.systemFont(ofSize: 12, weight: .medium)
             button.title = "\(i + 1)  \(shortName(target.name))"
             button.imagePosition = .imageLeading
+            button.imageScaling = .scaleProportionallyDown
             if let icon = target.icon {
                 let img = icon.copy() as! NSImage
-                img.size = NSSize(width: 16, height: 16)
+                img.size = NSSize(width: 14, height: 14)
                 button.image = img
             }
+            button.wantsLayer = true
+            button.layer?.masksToBounds = true
             button.toolTip = "\(target.name)  (⌘\(i + 1))"
             button.tag = i
             button.target = self

@@ -18,6 +18,8 @@ final class ComposerController: NSObject {
     private var capturedElement: AXUIElement?
     private var capturedPid: pid_t?
 
+    private var voiceTranscriber: SpeechTranscriber?
+    private var voiceIndicator: RecordingIndicator?
     private var llmTask: Task<Void, Never>?
 
     private static let llmDebounce: TimeInterval = 0.30
@@ -69,6 +71,10 @@ final class ComposerController: NSObject {
         llmTask?.cancel()
         llmTask = nil
         llmPredictor.cancelPendingPrediction()
+        voiceTranscriber?.cancelListening()
+        voiceTranscriber = nil
+        voiceIndicator?.hide()
+        voiceIndicator = nil
         window.hide()
     }
 
@@ -80,6 +86,79 @@ final class ComposerController: NSObject {
         window.highlightChip(index)
     }
 
+    // MARK: - Voice trigger in composer
+
+    private func checkVoiceTrigger() -> Bool {
+        let committed = window.textView.committedString
+        let trigger = Settings.shared.voiceTrigger
+        guard !trigger.isEmpty, committed.hasSuffix(trigger) else { return false }
+        guard voiceTranscriber == nil else { return true }
+
+        let cleanText = String(committed.dropLast(trigger.count))
+        window.textView.removeGhost()
+        window.textView.string = cleanText
+        window.refreshLayout()
+
+        let ctx = screenContext.context()
+        let indicator = RecordingIndicator()
+        self.voiceIndicator = indicator
+
+        let panelFrame = window.panel.frame
+        let indicatorRect = NSRect(
+            x: panelFrame.midX - 60,
+            y: panelFrame.maxY + 4,
+            width: 120, height: 24
+        )
+        indicator.show(near: indicatorRect)
+
+        let transcriber = SpeechTranscriber()
+        self.voiceTranscriber = transcriber
+
+        transcriber.onPartialResult = { [weak self] partial in
+            self?.voiceIndicator?.updatePartialText(partial)
+        }
+
+        if let screenCtx = ctx, !screenCtx.isEmpty {
+            let words = screenCtx.components(separatedBy: .whitespacesAndNewlines)
+                .map { $0.trimmingCharacters(in: .punctuationCharacters) }
+                .filter { $0.count >= 4 && $0.first?.isUppercase == true }
+            transcriber.contextualStrings = Array(Set(words).prefix(50))
+        }
+
+        transcriber.onTranscription = { [weak self] text in
+            guard let self else { return }
+            self.voiceIndicator?.hide()
+            self.voiceIndicator = nil
+            self.voiceTranscriber = nil
+            guard !text.isEmpty else { return }
+
+            if self.llmPredictor.isReady {
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let cleaned = await self.llmPredictor.cleanTranscription(
+                        raw: text, screenContext: ctx
+                    )
+                    self.insertVoiceResult(cleaned ?? text)
+                }
+            } else {
+                self.insertVoiceResult(text)
+            }
+        }
+        transcriber.startListening()
+        return true
+    }
+
+    private func insertVoiceResult(_ text: String) {
+        let current = window.textView.committedString
+        let needsSpace = !current.isEmpty && !current.hasSuffix(" ") && !current.hasSuffix("\n")
+        let insertion = (needsSpace ? " " : "") + text
+        window.textView.removeGhost()
+        window.textView.string = current + insertion
+        window.refreshLayout()
+        window.panel.makeFirstResponder(window.textView)
+        scheduleSuggestion()
+    }
+
     // MARK: - Suggestions
 
     private func scheduleSuggestion() {
@@ -88,6 +167,8 @@ final class ComposerController: NSObject {
 
         let committed = window.textView.committedString
         let caret = committed.count
+
+        if checkVoiceTrigger() { return }
 
         // Instant n-gram ghost so something appears immediately.
         if let s = ngramEngine.suggest(textBeforeCaret: committed, caretOffset: caret),

@@ -1,6 +1,6 @@
 import AppKit
 
-/// Detects a quick double-tap of the Option (⌥) key as a global trigger.
+/// Detects a quick double-tap of the Control (⌃) key as a global trigger.
 ///
 /// Uses NSEvent monitors (global + local) on `.flagsChanged` rather than a
 /// CGEventTap — we never need to *consume* the keystroke, just observe it, and
@@ -12,21 +12,21 @@ import AppKit
 /// class and hops to the main actor only to fire the callback.
 final class HotkeyMonitor {
 
-    /// Fired (on the main actor) when the user double-taps Option.
-    var onDoubleTapOption: (@MainActor () -> Void)?
+    /// Fired (on the main actor) when the user double-taps Control.
+    var onDoubleTapControl: (@MainActor () -> Void)?
 
     private var globalMonitor: Any?
     private var localMonitor: Any?
 
-    private var optionDown = false
-    private var lastOptionPress: TimeInterval = 0
+    private var controlDown = false
+    private var lastControlPress: TimeInterval = 0
     private var lastFire: TimeInterval = 0
 
     private let doubleTapWindow: TimeInterval = 0.4
     private let refractory: TimeInterval = 0.5
 
-    // Left/right Option virtual key codes.
-    private let optionKeyCodes: Set<UInt16> = [58, 61]
+    // Left/right Control virtual key codes.
+    private let controlKeyCodes: Set<UInt16> = [59, 62]
 
     func start() {
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
@@ -43,23 +43,23 @@ final class HotkeyMonitor {
         if let m = localMonitor { NSEvent.removeMonitor(m) }
         globalMonitor = nil
         localMonitor = nil
-        optionDown = false
+        controlDown = false
     }
 
     private func handle(_ event: NSEvent) {
-        guard optionKeyCodes.contains(event.keyCode) else { return }
-        let nowDown = event.modifierFlags.contains(.option)
+        guard controlKeyCodes.contains(event.keyCode) else { return }
+        let nowDown = event.modifierFlags.contains(.control)
 
         // Only react to the press edge (released → pressed).
-        if nowDown && !optionDown {
+        if nowDown && !controlDown {
             let now = ProcessInfo.processInfo.systemUptime
-            if now - lastOptionPress < doubleTapWindow && now - lastFire > refractory {
+            if now - lastControlPress < doubleTapWindow && now - lastFire > refractory {
                 lastFire = now
-                let callback = onDoubleTapOption
+                let callback = onDoubleTapControl
                 Task { @MainActor in callback?() }
             }
-            lastOptionPress = now
+            lastControlPress = now
         }
-        optionDown = nowDown
+        controlDown = nowDown
     }
 }

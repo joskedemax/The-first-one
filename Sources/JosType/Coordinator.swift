@@ -48,7 +48,7 @@ final class Coordinator {
         focusTracker.onChange = { [weak self] snapshot in
             self?.handleSnapshot(snapshot)
         }
-        hotkey.onDoubleTapOption = { [weak self] in
+        hotkey.onDoubleTapControl = { [weak self] in
             self?.composer.toggle()
         }
 
