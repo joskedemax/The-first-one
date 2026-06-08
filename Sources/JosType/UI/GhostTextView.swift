@@ -209,13 +209,43 @@ final class GhostTextView: NSTextView {
         super.selectAll(sender)
     }
 
-    override func keyDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.command),
-           let chars = event.charactersIgnoringModifiers,
-           let digit = Int(chars), (1...9).contains(digit) {
-            onSelectTarget?(digit)
-            return
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.modifierFlags.contains(.command),
+              let chars = event.charactersIgnoringModifiers else {
+            return super.performKeyEquivalent(with: event)
         }
-        super.keyDown(with: event)
+
+        if let digit = Int(chars), (1...9).contains(digit) {
+            onSelectTarget?(digit)
+            return true
+        }
+
+        switch chars {
+        case "a":
+            selectAll(nil)
+            return true
+        case "c":
+            removeGhost()
+            copy(nil)
+            return true
+        case "x":
+            removeGhost()
+            cut(nil)
+            return true
+        case "v":
+            removeGhost()
+            paste(nil)
+            return true
+        case "z":
+            removeGhost()
+            if event.modifierFlags.contains(.shift) {
+                undoManager?.redo()
+            } else {
+                undoManager?.undo()
+            }
+            return true
+        default:
+            return super.performKeyEquivalent(with: event)
+        }
     }
 }
