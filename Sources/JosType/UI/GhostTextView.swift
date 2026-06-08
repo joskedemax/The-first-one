@@ -57,13 +57,19 @@ final class GhostTextView: NSTextView {
     func removeGhost() {
         guard !ghostText.isEmpty else { return }
         guard let storage = textStorage else { ghostText = ""; return }
+        let sel = selectedRange()
         isMutatingGhost = true
-        let len = (ghostText as NSString).length
+        let ghostLen = (ghostText as NSString).length
         let total = storage.length
-        if total >= len {
-            storage.deleteCharacters(in: NSRange(location: total - len, length: len))
+        if total >= ghostLen {
+            storage.deleteCharacters(in: NSRange(location: total - ghostLen, length: ghostLen))
         }
         ghostText = ""
+        // Clamp selection to committed text so subsequent edits see a valid range.
+        let committed = storage.length
+        let clampedLoc = min(sel.location, committed)
+        let clampedEnd = min(sel.location + sel.length, committed)
+        setSelectedRange(NSRange(location: clampedLoc, length: clampedEnd - clampedLoc))
         isMutatingGhost = false
     }
 
@@ -136,14 +142,39 @@ final class GhostTextView: NSTextView {
             return
         }
         removeGhost()
-        super.insertText(string, replacementRange: replacementRange)
+        // After ghost removal the selection is clamped to committed text,
+        // so pass NSNotFound to let NSTextView use the current selection.
+        super.insertText(string, replacementRange: NSRange(location: NSNotFound, length: 0))
     }
 
     override func deleteBackward(_ sender: Any?) {
-        let pos = selectedRange().location
         removeGhost()
-        setSelectedRange(NSRange(location: min(pos, committedLength), length: 0))
         super.deleteBackward(sender)
+    }
+
+    override func deleteForward(_ sender: Any?) {
+        removeGhost()
+        super.deleteForward(sender)
+    }
+
+    override func deleteWordBackward(_ sender: Any?) {
+        removeGhost()
+        super.deleteWordBackward(sender)
+    }
+
+    override func deleteWordForward(_ sender: Any?) {
+        removeGhost()
+        super.deleteWordForward(sender)
+    }
+
+    override func deleteToBeginningOfLine(_ sender: Any?) {
+        removeGhost()
+        super.deleteToBeginningOfLine(sender)
+    }
+
+    override func deleteToEndOfLine(_ sender: Any?) {
+        removeGhost()
+        super.deleteToEndOfLine(sender)
     }
 
     override func doCommand(by selector: Selector) {
@@ -171,6 +202,11 @@ final class GhostTextView: NSTextView {
             if !ghostText.isEmpty { removeGhost() }
             super.doCommand(by: selector)
         }
+    }
+
+    override func selectAll(_ sender: Any?) {
+        removeGhost()
+        super.selectAll(sender)
     }
 
     override func keyDown(with event: NSEvent) {
