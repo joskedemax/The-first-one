@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>JosType</string>
+    <key>CFBundleDisplayName</key>
+    <string>JosType</string>
+    <key>CFBundleIdentifier</key>
+    <string>app.jostype.JosType</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>JosType</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <!-- Menu-bar agent: no Dock icon, no main window. -->
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>MIT License</string>
+    <!-- Explains the Input Monitoring prompt (Tab/Esc event tap). -->
+    <key>NSInputMonitoringUsageDescription</key>
+    <string>JosType watches for the Tab and Esc keys so you can accept or dismiss autocomplete suggestions.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>JosType reads visible text from your screen to provide context-aware suggestions.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>JosType uses the microphone for voice-to-text when you type a voice trigger phrase in any text field.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>JosType uses speech recognition to transcribe your voice into text.</string>
+</dict>
+</plist>
