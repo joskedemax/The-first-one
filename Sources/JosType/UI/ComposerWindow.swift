@@ -33,7 +33,7 @@ final class ComposerWindow: NSObject {
     private let minTextH: CGFloat = 56
     private let maxTextH: CGFloat = 280
 
-    init() {
+    override init() {
         effect = NSVisualEffectView()
         effect.material = .hudWindow
         effect.blendingMode = .behindWindow
