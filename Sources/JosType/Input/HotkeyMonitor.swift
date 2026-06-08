@@ -1,6 +1,6 @@
 import AppKit
 
-/// Detects a quick double-tap of the Control (⌃) key as a global trigger.
+/// Detects a quick double-tap of the Shift (⇧) key as a global trigger.
 ///
 /// Uses NSEvent monitors (global + local) on `.flagsChanged` rather than a
 /// CGEventTap — we never need to *consume* the keystroke, just observe it, and
@@ -12,21 +12,21 @@ import AppKit
 /// class and hops to the main actor only to fire the callback.
 final class HotkeyMonitor {
 
-    /// Fired (on the main actor) when the user double-taps Control.
-    var onDoubleTapControl: (@MainActor () -> Void)?
+    /// Fired (on the main actor) when the user double-taps Shift.
+    var onDoubleTapShift: (@MainActor () -> Void)?
 
     private var globalMonitor: Any?
     private var localMonitor: Any?
 
-    private var controlDown = false
-    private var lastControlPress: TimeInterval = 0
+    private var shiftDown = false
+    private var lastShiftPress: TimeInterval = 0
     private var lastFire: TimeInterval = 0
 
-    private let doubleTapWindow: TimeInterval = 0.4
+    private let doubleTapWindow: TimeInterval = 0.35
     private let refractory: TimeInterval = 0.5
 
-    // Left/right Control virtual key codes.
-    private let controlKeyCodes: Set<UInt16> = [59, 62]
+    // Left/right Shift virtual key codes.
+    private let shiftKeyCodes: Set<UInt16> = [56, 60]
 
     func start() {
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
@@ -43,23 +43,27 @@ final class HotkeyMonitor {
         if let m = localMonitor { NSEvent.removeMonitor(m) }
         globalMonitor = nil
         localMonitor = nil
-        controlDown = false
+        shiftDown = false
     }
 
     private func handle(_ event: NSEvent) {
-        guard controlKeyCodes.contains(event.keyCode) else { return }
-        let nowDown = event.modifierFlags.contains(.control)
+        guard shiftKeyCodes.contains(event.keyCode) else { return }
+        let nowDown = event.modifierFlags.contains(.shift)
+
+        // Ignore if other modifiers are held (user is doing Shift+Cmd etc.).
+        let otherModifiers: NSEvent.ModifierFlags = [.command, .option, .control]
+        if !event.modifierFlags.intersection(otherModifiers).isEmpty { return }
 
         // Only react to the press edge (released → pressed).
-        if nowDown && !controlDown {
+        if nowDown && !shiftDown {
             let now = ProcessInfo.processInfo.systemUptime
-            if now - lastControlPress < doubleTapWindow && now - lastFire > refractory {
+            if now - lastShiftPress < doubleTapWindow && now - lastFire > refractory {
                 lastFire = now
-                let callback = onDoubleTapControl
+                let callback = onDoubleTapShift
                 Task { @MainActor in callback?() }
             }
-            lastControlPress = now
+            lastShiftPress = now
         }
-        controlDown = nowDown
+        shiftDown = nowDown
     }
 }

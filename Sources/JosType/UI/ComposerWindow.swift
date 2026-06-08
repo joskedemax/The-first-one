@@ -27,11 +27,12 @@ final class ComposerWindow: NSObject {
 
     private let width: CGFloat = 720
     private let pad: CGFloat = 20
-    private let chipRowH: CGFloat = 32
+    private let chipH: CGFloat = 28
+    private let chipGap: CGFloat = 4
     private let hintH: CGFloat = 16
     private let gap: CGFloat = 10
-    private let minTextH: CGFloat = 80
-    private let maxTextH: CGFloat = 400
+    private let minTextH: CGFloat = 240
+    private let maxTextH: CGFloat = 500
 
     override init() {
         effect = NSVisualEffectView()
@@ -153,14 +154,38 @@ final class ComposerWindow: NSObject {
         name.count > 14 ? String(name.prefix(13)) + "…" : name
     }
 
+    private var chipsHeight: CGFloat = 28
+
     private func layoutChips() {
-        var x: CGFloat = 0
-        let h = chipRowH
+        let maxW = width - pad * 2
+        let h = chipH
+        let hSpacing: CGFloat = 6
+
+        // First pass: compute row assignments and total height.
+        var rows: [[NSButton]] = [[]]
+        var rowX: CGFloat = 0
         for button in chipButtons {
             button.sizeToFit()
             let w = min(max(button.frame.width + 14, 56), 150)
-            button.frame = NSRect(x: x, y: 0, width: w, height: h)
-            x += w + 6
+            if rowX + w > maxW && rowX > 0 {
+                rows.append([])
+                rowX = 0
+            }
+            rows[rows.count - 1].append(button)
+            rowX += w + hSpacing
+        }
+        let totalRows = CGFloat(rows.count)
+        chipsHeight = totalRows * h + max(totalRows - 1, 0) * chipGap
+
+        // Second pass: position buttons (AppKit y-up, first row at top).
+        for (rowIdx, row) in rows.enumerated() {
+            let y = chipsHeight - CGFloat(rowIdx + 1) * h - CGFloat(rowIdx) * chipGap
+            var x: CGFloat = 0
+            for button in row {
+                let w = min(max(button.frame.width + 14, 56), 150)
+                button.frame = NSRect(x: x, y: y, width: w, height: h)
+                x += w + hSpacing
+            }
         }
     }
 
@@ -173,7 +198,7 @@ final class ComposerWindow: NSObject {
         let used = lm.usedRect(for: tc).height
         let textH = min(max(used + textView.textContainerInset.height * 2 + 4, minTextH), maxTextH)
 
-        let totalH = pad + chipRowH + gap + textH + gap + hintH + pad
+        let totalH = pad + chipsHeight + gap + textH + gap + hintH + pad
         let frame = currentFrame(height: totalH)
         panel.setFrame(frame, display: true)
 
@@ -184,7 +209,7 @@ final class ComposerWindow: NSObject {
         hintLabel.frame = NSRect(x: pad, y: pad, width: innerW, height: hintH)
         scrollView.frame = NSRect(x: pad, y: pad + hintH + gap, width: innerW, height: textH)
         let chipsY = pad + hintH + gap + textH + gap
-        chipsContainer.frame = NSRect(x: pad, y: chipsY, width: innerW, height: chipRowH)
+        chipsContainer.frame = NSRect(x: pad, y: chipsY, width: innerW, height: chipsHeight)
     }
 
     private func currentFrame(height: CGFloat) -> NSRect {

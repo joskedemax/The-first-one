@@ -40,7 +40,7 @@ final class StatusBarController {
         let menu = NSMenu()
 
         let composerItem = NSMenuItem(
-            title: "Open Composer  (double-tap ⌃)",
+            title: "Open Composer  (double-tap ⇧)",
             action: #selector(openComposer),
             keyEquivalent: "")
         composerItem.target = self
