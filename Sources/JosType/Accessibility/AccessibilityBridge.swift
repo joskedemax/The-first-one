@@ -143,7 +143,7 @@ enum AccessibilityBridge {
 
     /// BFS an element tree for editable text fields/areas. Returns the largest
     /// one by area (the main input, not a tiny search box).
-    private static func bestEditableField(in root: AXUIElement, maxDepth: Int = 8) -> AXUIElement? {
+    private static func bestEditableField(in root: AXUIElement, maxDepth: Int = 20) -> AXUIElement? {
         var queue: [(AXUIElement, Int)] = [(root, 0)]
         var best: AXUIElement?
         var bestArea: CGFloat = 0
@@ -152,23 +152,28 @@ enum AccessibilityBridge {
             let (el, depth) = queue.removeFirst()
             if depth > maxDepth { continue }
 
-            if let role = string(el, kAXRoleAttribute as String),
-               (role == kAXTextAreaRole as String || role == kAXTextFieldRole as String) {
-                var settable: DarwinBoolean = false
-                if AXUIElementIsAttributeSettable(el, kAXValueAttribute as CFString, &settable) == .success,
-                   settable.boolValue {
-                    // Prefer text areas over text fields (multi-line > single-line).
-                    // Among the same type, prefer the largest by screen area.
-                    let isArea = (role == kAXTextAreaRole as String)
-                    let bestIsArea = best.flatMap { string($0, kAXRoleAttribute as String) } == kAXTextAreaRole as String
-                    var area: CGFloat = 0
-                    if let f = frame(el) { area = f.width * f.height }
+            if let role = string(el, kAXRoleAttribute as String) {
+                let editableRoles: Set<String> = [
+                    kAXTextAreaRole as String,
+                    kAXTextFieldRole as String,
+                    "AXWebArea"
+                ]
+                if editableRoles.contains(role) {
+                    var settable: DarwinBoolean = false
+                    let isSettable = AXUIElementIsAttributeSettable(el, kAXValueAttribute as CFString, &settable) == .success && settable.boolValue
+                    let isEditable = isSettable || role == "AXWebArea"
+                    if isEditable {
+                        let isArea = (role != kAXTextFieldRole as String)
+                        let bestIsArea = best.flatMap { string($0, kAXRoleAttribute as String) }.map { $0 != kAXTextFieldRole as String } ?? false
+                        var area: CGFloat = 0
+                        if let f = frame(el) { area = f.width * f.height }
 
-                    if best == nil
-                        || (isArea && !bestIsArea)
-                        || (isArea == bestIsArea && area > bestArea) {
-                        best = el
-                        bestArea = area
+                        if best == nil
+                            || (isArea && !bestIsArea)
+                            || (isArea == bestIsArea && area > bestArea) {
+                            best = el
+                            bestArea = area
+                        }
                     }
                 }
             }

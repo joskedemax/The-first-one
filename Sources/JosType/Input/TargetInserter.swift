@@ -30,15 +30,19 @@ enum TargetInserter {
             try? await Task.sleep(for: .milliseconds(350))
 
             // Click into the best text field to give the Electron web view
-            // keyboard focus. Searches the focused window first.
+            // keyboard focus. Searches the focused window first; if nothing
+            // is found, clicks the bottom third of the window (where chat
+            // inputs typically live in apps like Claude Desktop).
             if let pid {
                 let appElement = AXUIElementCreateApplication(pid)
                 let clickTarget = AccessibilityBridge.element(appElement, kAXFocusedUIElementAttribute as String)
                     ?? AccessibilityBridge.findEditableTextField(in: appElement)
                 if let clickTarget {
                     clickCenter(of: clickTarget)
-                    try? await Task.sleep(for: .milliseconds(100))
+                } else if let window = AccessibilityBridge.focusedWindow(of: appElement) {
+                    clickBottomThird(of: window)
                 }
+                try? await Task.sleep(for: .milliseconds(100))
             }
 
             paste(text)
@@ -91,6 +95,30 @@ enum TargetInserter {
         }
         guard size.width > 0 && size.height > 0 else { return }
         let pt = CGPoint(x: pos.x + size.width / 2, y: pos.y + size.height / 2)
+        let src = CGEventSource(stateID: .combinedSessionState)
+        let down = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: pt, mouseButton: .left)
+        let up = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: pt, mouseButton: .left)
+        down?.post(tap: .cghidEventTap)
+        up?.post(tap: .cghidEventTap)
+    }
+
+    /// Click the bottom third of a window — where chat/compose inputs live
+    /// in most apps. Last resort when no text field is found via AX.
+    private static func clickBottomThird(of window: AXUIElement) {
+        var posRef: CFTypeRef?
+        var sizeRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &posRef)
+        AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeRef)
+        var pos = CGPoint.zero
+        var size = CGSize.zero
+        if let pv = posRef, CFGetTypeID(pv) == AXValueGetTypeID() {
+            AXValueGetValue(pv as! AXValue, .cgPoint, &pos)
+        }
+        if let sv = sizeRef, CFGetTypeID(sv) == AXValueGetTypeID() {
+            AXValueGetValue(sv as! AXValue, .cgSize, &size)
+        }
+        guard size.width > 0 && size.height > 0 else { return }
+        let pt = CGPoint(x: pos.x + size.width / 2, y: pos.y + size.height * 0.85)
         let src = CGEventSource(stateID: .combinedSessionState)
         let down = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: pt, mouseButton: .left)
         let up = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: pt, mouseButton: .left)
