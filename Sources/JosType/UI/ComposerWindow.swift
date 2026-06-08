@@ -75,7 +75,7 @@ final class ComposerWindow: NSObject {
         chipsContainer.wantsLayer = true
         chipsContainer.layer?.masksToBounds = true
 
-        hintLabel = NSTextField(labelWithString: "Tab accept · ⏎ insert · ⌘1–9 pick app · esc cancel")
+        hintLabel = NSTextField(labelWithString: "Tab word · ` accept all · ⏎ insert · ⌘1–9 pick app · esc cancel")
         hintLabel.font = NSFont.systemFont(ofSize: 11)
         hintLabel.textColor = .tertiaryLabelColor
         hintLabel.alignment = .right

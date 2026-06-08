@@ -19,7 +19,6 @@ final class ComposerController: NSObject {
     private var capturedPid: pid_t?
 
     private var voiceTranscriber: SpeechTranscriber?
-    private var voiceIndicator: RecordingIndicator?
     private var llmTask: Task<Void, Never>?
 
     private static let llmDebounce: TimeInterval = 0.30
@@ -73,8 +72,6 @@ final class ComposerController: NSObject {
         llmPredictor.cancelPendingPrediction()
         voiceTranscriber?.cancelListening()
         voiceTranscriber = nil
-        voiceIndicator?.hide()
-        voiceIndicator = nil
         window.hide()
     }
 
@@ -97,25 +94,17 @@ final class ComposerController: NSObject {
         let cleanText = String(committed.dropLast(trigger.count))
         window.textView.removeGhost()
         window.textView.string = cleanText
+        window.textView.showGhost(" listening...")
         window.refreshLayout()
 
         let ctx = screenContext.context()
-        let indicator = RecordingIndicator()
-        self.voiceIndicator = indicator
-
-        let panelFrame = window.panel.frame
-        let indicatorRect = NSRect(
-            x: panelFrame.midX - 60,
-            y: panelFrame.maxY + 4,
-            width: 120, height: 24
-        )
-        indicator.show(near: indicatorRect)
-
         let transcriber = SpeechTranscriber()
         self.voiceTranscriber = transcriber
 
         transcriber.onPartialResult = { [weak self] partial in
-            self?.voiceIndicator?.updatePartialText(partial)
+            guard let self else { return }
+            self.window.textView.showGhost(partial.isEmpty ? " listening..." : " " + partial)
+            self.window.refreshLayout()
         }
 
         if let screenCtx = ctx, !screenCtx.isEmpty {
@@ -127,10 +116,13 @@ final class ComposerController: NSObject {
 
         transcriber.onTranscription = { [weak self] text in
             guard let self else { return }
-            self.voiceIndicator?.hide()
-            self.voiceIndicator = nil
             self.voiceTranscriber = nil
-            guard !text.isEmpty else { return }
+            self.window.textView.removeGhost()
+            guard !text.isEmpty else {
+                self.window.textView.showGhost(" voice capture failed")
+                self.window.refreshLayout()
+                return
+            }
 
             if self.llmPredictor.isReady {
                 Task { @MainActor [weak self] in

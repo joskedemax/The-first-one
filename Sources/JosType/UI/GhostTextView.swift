@@ -43,11 +43,14 @@ final class GhostTextView: NSTextView {
     func showGhost(_ text: String) {
         removeGhost()
         guard !text.isEmpty, let storage = textStorage else { return }
+        // Only show ghost when cursor is at the end of committed text.
+        let caret = selectedRange().location
+        let committed = committedLength
+        guard caret >= committed else { return }
         isMutatingGhost = true
-        let caret = committedLength
         storage.append(gradientGhost(text))
         ghostText = text
-        setSelectedRange(NSRange(location: caret, length: 0))
+        setSelectedRange(NSRange(location: committed, length: 0))
         isMutatingGhost = false
     }
 
@@ -130,12 +133,18 @@ final class GhostTextView: NSTextView {
     // MARK: - Key handling
 
     override func insertText(_ string: Any, replacementRange: NSRange) {
+        if let s = string as? String, s == "`", !ghostText.isEmpty {
+            _ = acceptGhostAll()
+            return
+        }
         removeGhost()
         super.insertText(string, replacementRange: replacementRange)
     }
 
     override func deleteBackward(_ sender: Any?) {
+        let pos = selectedRange().location
         removeGhost()
+        setSelectedRange(NSRange(location: min(pos, committedLength), length: 0))
         super.deleteBackward(sender)
     }
 
@@ -154,11 +163,10 @@ final class GhostTextView: NSTextView {
         case #selector(cancelOperation(_:)):
             onCancel?()
             return
-        case #selector(moveRight(_:)):
-            if !ghostText.isEmpty, selectedRange().location >= committedLength {
-                _ = acceptGhostAll()
-                return
-            }
+        case #selector(moveRight(_:)), #selector(moveLeft(_:)),
+             #selector(moveUp(_:)), #selector(moveDown(_:)),
+             #selector(moveToBeginningOfLine(_:)), #selector(moveToEndOfLine(_:)),
+             #selector(moveWordRight(_:)), #selector(moveWordLeft(_:)):
             removeGhost()
             super.doCommand(by: selector)
         default:

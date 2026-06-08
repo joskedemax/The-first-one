@@ -166,9 +166,9 @@ final class StatusBarController {
         Smart, private, on-device autocomplete for Mac.
         Runs entirely on your machine via Apple MLX.
 
-        Double-tap ⌥ → open the floating composer
-        Tab → accept next word    ⏎ → insert into target
-        → (Right Arrow) → accept whole suggestion
+        Double-tap ⇧ → open the floating composer
+        Tab → accept next word    ` → accept whole suggestion
+        ⏎ → insert into target app
         ⌘1–9 → pick which app to insert into
         Esc → cancel
         \(Settings.shared.voiceTrigger) → voice-to-text input
