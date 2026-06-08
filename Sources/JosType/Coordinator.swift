@@ -1,35 +1,35 @@
 import AppKit
 import ApplicationServices
 
-/// The brain of the app: wires the focus tracker, prediction engine, overlay,
-/// and key tap together. Uses the LLM for high-quality predictions when
-/// available, falling back to the n-gram engine while the model loads.
+/// The brain of the app. Owns the prediction engines and wires the global
+/// hotkey to the floating composer (the single input surface where JosType's
+/// autocomplete runs), and keeps the focus tracker alive for the ",,talk"
+/// voice trigger and on-the-fly personalization.
 @MainActor
 final class Coordinator {
 
-    private static let llmDebounceDelay: TimeInterval = 0.35
     private static let trainingSaveDelay: TimeInterval = 2.0
-    private static let maxLLMTokens = 200
 
     private let ngramModel = LanguageModel()
     private let ngramEngine: PredictionEngine
     private let llmPredictor = LLMPredictor()
     private let focusTracker = FocusTracker()
-    private let overlay = SuggestionOverlay()
-    private let keyTap = KeyTap()
-
-    private var active: (suggestion: Suggestion, snapshot: TextSnapshot)?
+    private let screenContext = ScreenContextProvider()
+    private let voiceCapture = VoiceCaptureController()
+    private let hotkey = HotkeyMonitor()
+    private let composer: ComposerController
 
     private var lastTrainedText = ""
-    private var lastProcessedSnapshot: (fullText: String, caretOffset: Int)?
     private var saveWorkItem: DispatchWorkItem?
-    private var llmWorkItem: DispatchWorkItem?
-    private let screenContext = ScreenContextProvider()
-    private let invocationFilter = InvocationFilter()
-    private let voiceCapture = VoiceCaptureController()
 
     init() {
         ngramEngine = PredictionEngine(model: ngramModel)
+        composer = ComposerController(
+            llmPredictor: llmPredictor,
+            ngramEngine: ngramEngine,
+            ngramModel: ngramModel,
+            screenContext: screenContext
+        )
     }
 
     // MARK: - Public
@@ -48,23 +48,14 @@ final class Coordinator {
         focusTracker.onChange = { [weak self] snapshot in
             self?.handleSnapshot(snapshot)
         }
-        keyTap.hasActiveSuggestion = { [weak self] in
-            guard let self else { return false }
-            return self.active != nil || self.voiceCapture.isActive
-        }
-        keyTap.onAcceptWord = { [weak self] in self?.acceptNextWord() ?? false }
-        keyTap.onAcceptAll = { [weak self] in self?.acceptAll() ?? false }
-        keyTap.onDismiss = { [weak self] in
-            guard let self else { return false }
-            if self.voiceCapture.isActive { return self.voiceCapture.cancel() }
-            return self.dismissActive()
+        hotkey.onDoubleTapOption = { [weak self] in
+            self?.composer.toggle()
         }
 
         focusTracker.start()
-        keyTap.start()
+        hotkey.start()
         screenContext.warmUp()
 
-        // Start loading the selected model in the background.
         let selectedModel = Settings.shared.selectedModel
         Task { @MainActor in
             await llmPredictor.loadModel(selectedModel)
@@ -73,31 +64,26 @@ final class Coordinator {
 
     func stop() {
         focusTracker.stop()
-        keyTap.stop()
+        hotkey.stop()
+        composer.dismiss()
         llmPredictor.cancelPendingPrediction()
         _ = voiceCapture.cancel()
-        clearSuggestion()
-        llmWorkItem?.cancel()
-        llmWorkItem = nil
         saveWorkItem?.cancel()
         saveWorkItem = nil
-        lastProcessedSnapshot = nil
         ngramModel.save()
     }
 
     func setEnabled(_ enabled: Bool) {
         if enabled {
             focusTracker.start()
-            keyTap.start()
+            hotkey.start()
         } else {
-            clearSuggestion()
+            composer.dismiss()
             llmPredictor.cancelPendingPrediction()
-            llmWorkItem?.cancel()
-            llmWorkItem = nil
             saveWorkItem?.cancel()
             saveWorkItem = nil
             focusTracker.stop()
-            keyTap.stop()
+            hotkey.stop()
         }
     }
 
@@ -108,260 +94,31 @@ final class Coordinator {
         }
     }
 
-    // MARK: - Snapshot handling
+    /// Open the composer from a menu action.
+    func openComposer() {
+        composer.open()
+    }
+
+    // MARK: - Snapshot handling (voice trigger + personalization only)
 
     private func handleSnapshot(_ snapshot: TextSnapshot?) {
-        guard Settings.shared.isEnabled, let snapshot else {
-            clearSuggestion()
-            return
-        }
+        guard Settings.shared.isEnabled, let snapshot else { return }
         guard !voiceCapture.isActive else { return }
-
-        // Deduplicate: skip if text and caret haven't changed.
-        if let last = lastProcessedSnapshot,
-           last.fullText == snapshot.fullText,
-           last.caretOffset == snapshot.caretOffset {
-            return
-        }
-        lastProcessedSnapshot = (snapshot.fullText, snapshot.caretOffset)
 
         let textBeforeCaret = String(snapshot.fullText.prefix(snapshot.caretOffset))
 
-        // Check for ",,talk" voice trigger.
+        // ",,talk" voice trigger still works inline in any field.
         if let triggerRange = VoiceTrigger.detect(in: textBeforeCaret, caretOffset: snapshot.caretOffset) {
             startVoiceCapture(element: snapshot.element, fullText: snapshot.fullText, triggerRange: triggerRange)
             return
         }
 
         scheduleTraining(for: snapshot.fullText)
-
-        let ctx = Tokenizer.analyze(textBeforeCaret)
-        if !ctx.currentPrefix.isEmpty && ctx.currentPrefix.count < Settings.shared.minPrefixLength {
-            clearSuggestion()
-            return
-        }
-
-        if let ngramSuggestion = ngramEngine.suggest(
-            textBeforeCaret: textBeforeCaret,
-            caretOffset: snapshot.caretOffset
-        ) {
-            present(ngramSuggestion, for: snapshot)
-        }
-
-        // Gate the (expensive) LLM continuation through the invocation filter
-        // so we only fire it at sensible moments — not mid-word, not on thin
-        // context, and not right after the user rejected a suggestion.
-        if llmPredictor.isReady {
-            let textAfterCaret = String(snapshot.fullText.dropFirst(snapshot.caretOffset))
-            let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-            if invocationFilter.shouldSuggestContinuation(
-                textBeforeCaret: textBeforeCaret,
-                textAfterCaret: textAfterCaret,
-                bundleID: bundleID
-            ) {
-                scheduleLLMPrediction(textBeforeCaret: textBeforeCaret, snapshot: snapshot)
-            }
-        }
-    }
-
-    private func scheduleLLMPrediction(textBeforeCaret: String, snapshot: TextSnapshot) {
-        llmWorkItem?.cancel()
-        llmPredictor.cancelPendingPrediction()
-
-        let visibleContext = screenContext.context()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            Task { @MainActor in
-                await self.llmPredictor.predictStreaming(
-                    context: textBeforeCaret,
-                    screenContext: visibleContext,
-                    maxTokens: Self.maxLLMTokens
-                ) { [weak self] partialText in
-                    guard let self else { return }
-
-                    // Only update if the user hasn't moved on.
-                    let currentText = self.currentTextBeforeCaret()
-                    guard currentText == textBeforeCaret else { return }
-
-                    let suggestion = Suggestion(
-                        kind: .nextWord,
-                        insertText: partialText,
-                        displayText: partialText,
-                        replaceRange: snapshot.caretOffset..<snapshot.caretOffset
-                    )
-
-                    if self.overlay.isVisible, self.active != nil {
-                        self.active = (suggestion, snapshot)
-                        self.overlay.updateText(partialText)
-                    } else {
-                        self.present(suggestion, for: snapshot)
-                    }
-                }
-            }
-        }
-        llmWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.llmDebounceDelay, execute: work)
-    }
-
-    private func currentTextBeforeCaret() -> String? {
-        focusTracker.emitCurrentSnapshot()
-        guard let elem = focusTracker.currentElement,
-              let text = AccessibilityBridge.string(elem, kAXValueAttribute as String),
-              let range = AccessibilityBridge.selectedRange(elem),
-              range.length == 0 else { return nil }
-        let caret = max(0, min(range.location, (text as NSString).length))
-        let prefix = (text as NSString).substring(to: caret)
-        return prefix
-    }
-
-    // MARK: - Present / accept / dismiss
-
-    private func present(_ suggestion: Suggestion, for snapshot: TextSnapshot) {
-        active = (suggestion, snapshot)
-
-        let fieldFrame = AccessibilityBridge.frame(snapshot.element)
-        let fontSize = AccessibilityBridge.fontSize(snapshot.element)
-        let font = fontSize.map { NSFont.systemFont(ofSize: $0) }
-
-        let caretUTF16 = utf16Caret(in: snapshot)
-        let caretRange = CFRange(location: caretUTF16, length: 0)
-        let probeRange = caretUTF16 > 0
-            ? CFRange(location: caretUTF16 - 1, length: 1)
-            : caretRange
-
-        if let rect = AccessibilityBridge.boundsForRange(snapshot.element, caretRange),
-           rect.height > 0 {
-            overlay.show(suggestion, caretRect: rect, fieldFrame: fieldFrame, font: font)
-        } else if let rect = AccessibilityBridge.boundsForRange(snapshot.element, probeRange),
-                  rect.height > 0 {
-            let adjusted = CGRect(x: rect.maxX, y: rect.origin.y,
-                                  width: 0, height: rect.height)
-            overlay.show(suggestion, caretRect: adjusted, fieldFrame: fieldFrame, font: font)
-        } else if let rect = fallbackRect(for: snapshot.element) {
-            overlay.show(suggestion, caretRect: rect, fieldFrame: fieldFrame, font: font)
-        } else {
-            overlay.hide()
-        }
-    }
-
-    private func fallbackRect(for element: AXUIElement) -> CGRect? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            element, "AXFrame" as CFString, &value) == .success,
-              let v = value, CFGetTypeID(v) == AXValueGetTypeID() else { return nil }
-        var rect = CGRect.zero
-        guard AXValueGetValue(v as! AXValue, .cgRect, &rect) else { return nil }
-        if let primary = NSScreen.screens.first {
-            rect.origin.y = primary.frame.maxY - rect.origin.y - rect.height
-        }
-        return CGRect(x: rect.minX + 4, y: rect.minY + 2, width: 0, height: rect.height)
-    }
-
-    private func utf16Caret(in snapshot: TextSnapshot) -> Int {
-        let prefix = String(snapshot.fullText.prefix(snapshot.caretOffset))
-        return (prefix as NSString).length
-    }
-
-    private func acceptAll() -> Bool {
-        guard let (suggestion, snapshot) = active else { return false }
-        guard isFocusStillValid(snapshot) else {
-            clearSuggestion()
-            return false
-        }
-        let ok = TextInserter.apply(suggestion, to: snapshot.element, fullText: snapshot.fullText)
-        clearSuggestion()
-        lastProcessedSnapshot = nil
-        invocationFilter.noteAccepted()
-        if Settings.shared.isLearningEnabled {
-            ngramModel.train(on: suggestion.insertText)
-        }
-        return ok
-    }
-
-    private func acceptNextWord() -> Bool {
-        guard let (suggestion, snapshot) = active else { return false }
-        guard isFocusStillValid(snapshot) else {
-            clearSuggestion()
-            return false
-        }
-        let text = suggestion.insertText
-        guard !text.isEmpty else { return false }
-
-        // Find the end of the first word (include trailing space).
-        let trimmed = text.drop(while: { $0 == " " })
-        guard let spaceIdx = trimmed.firstIndex(of: " ") else {
-            return acceptAll()
-        }
-        let wordEnd = trimmed.index(after: spaceIdx)
-        let firstWord = String(text[text.startIndex..<wordEnd])
-        let remaining = String(text[wordEnd...])
-
-        // Insert just the first word.
-        let wordSuggestion = Suggestion(
-            kind: suggestion.kind,
-            insertText: firstWord,
-            displayText: firstWord,
-            replaceRange: suggestion.replaceRange
-        )
-        let ok = TextInserter.apply(wordSuggestion, to: snapshot.element, fullText: snapshot.fullText)
-        guard ok else { return false }
-        lastProcessedSnapshot = nil
-
-        if remaining.trimmingCharacters(in: .whitespaces).isEmpty {
-            clearSuggestion()
-        } else {
-            // Update active suggestion with remaining text.
-            let newCaretOffset = suggestion.replaceRange.upperBound + firstWord.count
-            let newSnapshot = TextSnapshot(
-                element: snapshot.element,
-                fullText: snapshot.fullText + firstWord,
-                caretOffset: newCaretOffset
-            )
-            let remainingSuggestion = Suggestion(
-                kind: suggestion.kind,
-                insertText: remaining,
-                displayText: remaining,
-                replaceRange: newCaretOffset..<newCaretOffset
-            )
-            active = (remainingSuggestion, newSnapshot)
-            present(remainingSuggestion, for: newSnapshot)
-        }
-
-        invocationFilter.noteAccepted()
-        if Settings.shared.isLearningEnabled {
-            ngramModel.train(on: firstWord)
-        }
-        return true
-    }
-
-    private func dismissActive() -> Bool {
-        guard active != nil else { return false }
-        clearSuggestion()
-        invocationFilter.noteRejected()
-        return true
-    }
-
-    private func isFocusStillValid(_ snapshot: TextSnapshot) -> Bool {
-        guard let focused = AccessibilityBridge.focusedElement(),
-              let snapshotPID = AccessibilityBridge.pid(of: snapshot.element),
-              let currentPID = AccessibilityBridge.pid(of: focused) else { return false }
-        return snapshotPID == currentPID
-    }
-
-    private func clearSuggestion() {
-        active = nil
-        overlay.hide()
     }
 
     // MARK: - Voice capture
 
     private func startVoiceCapture(element: AXUIElement, fullText: String, triggerRange: Range<Int>) {
-        clearSuggestion()
-        lastProcessedSnapshot = nil
-
-        voiceCapture.onFinished = { [weak self] in
-            self?.lastProcessedSnapshot = nil
-        }
         voiceCapture.start(
             element: element,
             fullText: fullText,

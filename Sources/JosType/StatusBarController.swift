@@ -39,6 +39,15 @@ final class StatusBarController {
     private func buildMenu() {
         let menu = NSMenu()
 
+        let composerItem = NSMenuItem(
+            title: "Open Composer  (double-tap ⌥)",
+            action: #selector(openComposer),
+            keyEquivalent: "")
+        composerItem.target = self
+        menu.addItem(composerItem)
+
+        menu.addItem(.separator())
+
         enabledItem.target = self
         enabledItem.state = Settings.shared.isEnabled ? .on : .off
         menu.addItem(enabledItem)
@@ -121,6 +130,10 @@ final class StatusBarController {
         }
     }
 
+    @objc private func openComposer() {
+        coordinator.openComposer()
+    }
+
     @objc private func toggleEnabled() {
         let newValue = !Settings.shared.isEnabled
         Settings.shared.isEnabled = newValue
@@ -153,10 +166,11 @@ final class StatusBarController {
         Smart, private, on-device autocomplete for Mac.
         Runs entirely on your machine via Apple MLX.
 
-        Tab → accept next word
-        ` (backtick) → accept entire suggestion
-        Right Arrow → accept entire suggestion
-        Esc → dismiss
+        Double-tap ⌥ → open the floating composer
+        Tab → accept next word    ⏎ → insert into target
+        → (Right Arrow) → accept whole suggestion
+        ⌘1–9 → pick which app to insert into
+        Esc → cancel
         \(Settings.shared.voiceTrigger) → voice-to-text input
         """
         alert.addButton(withTitle: "OK")
