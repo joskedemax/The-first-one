@@ -9,7 +9,7 @@ final class Coordinator {
 
     private static let llmDebounceDelay: TimeInterval = 0.35
     private static let trainingSaveDelay: TimeInterval = 2.0
-    private static let maxLLMTokens = 80
+    private static let maxLLMTokens = 200
 
     private let ngramModel = LanguageModel()
     private let ngramEngine: PredictionEngine

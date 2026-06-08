@@ -235,9 +235,9 @@ final class LLMPredictor {
                     if Task.isCancelled { break }
                     if case .chunk(let s) = item {
                         output += s
-                        if output.count > 250 { break }
+                        if output.count > 600 { break }
 
-                        let partial = self.cleanResponse(output, maxLength: 200)
+                        let partial = self.cleanResponse(output, maxLength: 500)
                         if partial.count >= 2, !Task.isCancelled {
                             var display = partial
                             if let last = context.last, !last.isWhitespace,
@@ -278,7 +278,7 @@ final class LLMPredictor {
                     if Task.isCancelled { break }
                     if case .chunk(let s) = item {
                         output += s
-                        if output.count > 250 { break }
+                        if output.count > 600 { break }
                     }
                 }
                 return output
@@ -295,7 +295,7 @@ final class LLMPredictor {
     // MARK: - Post-processing
 
     nonisolated func postProcess(_ response: String, context: String) -> String? {
-        var cleaned = cleanResponse(response, maxLength: 200)
+        var cleaned = cleanResponse(response, maxLength: 500)
         guard cleaned.count >= 2 else { return nil }
 
         let contextTail = String(context.suffix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -332,7 +332,7 @@ final class LLMPredictor {
 
         \"\(trimmed)\"
 
-        Continue their text naturally. Write the next 1-2 sentences that would \
+        Continue their text naturally. Write the next 1-4 sentences that would \
         logically follow. Match their tone and style. Output ONLY the continuation \
         text with no quotes, labels, or explanation.
         """
@@ -355,7 +355,7 @@ final class LLMPredictor {
             let c = result[i]
             if c == "." || c == "!" || c == "?" {
                 sentenceEnds += 1
-                if sentenceEnds >= 2 {
+                if sentenceEnds >= 4 {
                     cutoff = result.index(after: i)
                     break
                 }

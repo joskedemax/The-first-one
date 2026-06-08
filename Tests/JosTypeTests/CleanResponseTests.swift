@@ -19,10 +19,10 @@ final class CleanResponseTests: XCTestCase {
         XCTAssertEqual(predictor.cleanResponse("`hello`", maxLength: 200), "hello")
     }
 
-    func testLimitsToTwoSentences() {
-        let input = "First sentence. Second sentence. Third sentence."
+    func testLimitsToFourSentences() {
+        let input = "First. Second. Third. Fourth. Fifth."
         let result = predictor.cleanResponse(input, maxLength: 500)
-        XCTAssertEqual(result, "First sentence. Second sentence.")
+        XCTAssertEqual(result, "First. Second. Third. Fourth.")
     }
 
     func testTruncatesAtMaxLength() {
