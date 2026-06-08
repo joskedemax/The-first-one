@@ -122,11 +122,32 @@ enum AccessibilityBridge {
         )
     }
 
-    /// Walk the AX tree of an app to find an editable text area or text field.
-    /// Useful for Electron apps where no focused element is reported until the
-    /// user clicks into the web view's input.
-    static func findEditableTextField(in appElement: AXUIElement, maxDepth: Int = 6) -> AXUIElement? {
-        var queue: [(AXUIElement, Int)] = [(appElement, 0)]
+    /// The focused window of an app (the frontmost window the user is looking at).
+    static func focusedWindow(of appElement: AXUIElement) -> AXUIElement? {
+        element(appElement, kAXFocusedWindowAttribute as String)
+    }
+
+    /// Find the best editable text field in an app. Searches the focused window
+    /// first (handles multiple windows correctly), then falls back to the whole
+    /// app tree. Prefers the largest text area (most likely the main input).
+    static func findEditableTextField(in appElement: AXUIElement) -> AXUIElement? {
+        // Scope to the focused window so we don't land in the wrong window.
+        if let window = focusedWindow(of: appElement),
+           let field = bestEditableField(in: window) {
+            return field
+        }
+        // Fallback: search the whole app (single-window apps, or if focused
+        // window query fails).
+        return bestEditableField(in: appElement)
+    }
+
+    /// BFS an element tree for editable text fields/areas. Returns the largest
+    /// one by area (the main input, not a tiny search box).
+    private static func bestEditableField(in root: AXUIElement, maxDepth: Int = 8) -> AXUIElement? {
+        var queue: [(AXUIElement, Int)] = [(root, 0)]
+        var best: AXUIElement?
+        var bestArea: CGFloat = 0
+
         while !queue.isEmpty {
             let (el, depth) = queue.removeFirst()
             if depth > maxDepth { continue }
@@ -136,7 +157,19 @@ enum AccessibilityBridge {
                 var settable: DarwinBoolean = false
                 if AXUIElementIsAttributeSettable(el, kAXValueAttribute as CFString, &settable) == .success,
                    settable.boolValue {
-                    return el
+                    // Prefer text areas over text fields (multi-line > single-line).
+                    // Among the same type, prefer the largest by screen area.
+                    let isArea = (role == kAXTextAreaRole as String)
+                    let bestIsArea = best.flatMap { string($0, kAXRoleAttribute as String) } == kAXTextAreaRole as String
+                    var area: CGFloat = 0
+                    if let f = frame(el) { area = f.width * f.height }
+
+                    if best == nil
+                        || (isArea && !bestIsArea)
+                        || (isArea == bestIsArea && area > bestArea) {
+                        best = el
+                        bestArea = area
+                    }
                 }
             }
 
@@ -147,7 +180,7 @@ enum AccessibilityBridge {
                 queue.append((child, depth + 1))
             }
         }
-        return nil
+        return best
     }
 
     /// PID of the app owning an element (for scoping observers).

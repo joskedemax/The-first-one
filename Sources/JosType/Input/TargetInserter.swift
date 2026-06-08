@@ -29,32 +29,15 @@ enum TargetInserter {
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(350))
 
-            // Click into the target's focused element to ensure the Electron
-            // web view actually has keyboard focus.
+            // Click into the best text field to give the Electron web view
+            // keyboard focus. Searches the focused window first.
             if let pid {
                 let appElement = AXUIElementCreateApplication(pid)
-                if let focused = AccessibilityBridge.element(appElement, kAXFocusedUIElementAttribute as String) {
-                    var posRef: CFTypeRef?
-                    var sizeRef: CFTypeRef?
-                    AXUIElementCopyAttributeValue(focused, kAXPositionAttribute as CFString, &posRef)
-                    AXUIElementCopyAttributeValue(focused, kAXSizeAttribute as CFString, &sizeRef)
-                    var pos = CGPoint.zero
-                    var size = CGSize.zero
-                    if let pv = posRef, CFGetTypeID(pv) == AXValueGetTypeID() {
-                        AXValueGetValue(pv as! AXValue, .cgPoint, &pos)
-                    }
-                    if let sv = sizeRef, CFGetTypeID(sv) == AXValueGetTypeID() {
-                        AXValueGetValue(sv as! AXValue, .cgSize, &size)
-                    }
-                    if size.width > 0 && size.height > 0 {
-                        let clickPt = CGPoint(x: pos.x + size.width / 2, y: pos.y + size.height / 2)
-                        let src = CGEventSource(stateID: .combinedSessionState)
-                        let mouseDown = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: clickPt, mouseButton: .left)
-                        let mouseUp = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: clickPt, mouseButton: .left)
-                        mouseDown?.post(tap: .cghidEventTap)
-                        mouseUp?.post(tap: .cghidEventTap)
-                        try? await Task.sleep(for: .milliseconds(100))
-                    }
+                let clickTarget = AccessibilityBridge.element(appElement, kAXFocusedUIElementAttribute as String)
+                    ?? AccessibilityBridge.findEditableTextField(in: appElement)
+                if let clickTarget {
+                    clickCenter(of: clickTarget)
+                    try? await Task.sleep(for: .milliseconds(100))
                 }
             }
 
@@ -89,6 +72,30 @@ enum TargetInserter {
         }
 
         return false
+    }
+
+    /// Synthesize a click at the center of an AX element. AX position is in
+    /// CG (top-left-origin) coordinates, which is what CGEvent expects.
+    private static func clickCenter(of element: AXUIElement) {
+        var posRef: CFTypeRef?
+        var sizeRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef)
+        AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef)
+        var pos = CGPoint.zero
+        var size = CGSize.zero
+        if let pv = posRef, CFGetTypeID(pv) == AXValueGetTypeID() {
+            AXValueGetValue(pv as! AXValue, .cgPoint, &pos)
+        }
+        if let sv = sizeRef, CFGetTypeID(sv) == AXValueGetTypeID() {
+            AXValueGetValue(sv as! AXValue, .cgSize, &size)
+        }
+        guard size.width > 0 && size.height > 0 else { return }
+        let pt = CGPoint(x: pos.x + size.width / 2, y: pos.y + size.height / 2)
+        let src = CGEventSource(stateID: .combinedSessionState)
+        let down = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: pt, mouseButton: .left)
+        let up = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: pt, mouseButton: .left)
+        down?.post(tap: .cghidEventTap)
+        up?.post(tap: .cghidEventTap)
     }
 
     private static func paste(_ text: String) {
